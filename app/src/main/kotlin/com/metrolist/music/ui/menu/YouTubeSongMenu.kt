@@ -641,8 +641,18 @@ fun YouTubeSongMenu(
             // Check if this is a podcast episode (album ID doesn't start with MPREb_)
             val isPodcast = song.album?.let { !it.id.startsWith("MPREb_") } ?: false
 
+            val slskdMenuItems =
+                rememberSlskdMenuItems(
+                    mediaId = song.id,
+                    artistName = song.artists.joinToString(", ") { it.name },
+                    title = song.title,
+                    service = playerConnection.service,
+                    onMenuDismiss = onDismiss,
+                )
+
             Material3MenuGroup(
                 items = buildList {
+                    addAll(slskdMenuItems)
                     // Don't show "View Artist" for podcasts - only show "View Podcast"
                     if (artists.isNotEmpty() && !isPodcast) {
                         add(

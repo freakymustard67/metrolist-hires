@@ -990,4 +990,44 @@
     <string name="stream_source_android_vr_desc">Android VR clients (all versions).</string>
     <string name="stream_source_web_creator">WEB_CREATOR</string>
     <string name="stream_source_web_creator_desc">Creator web client.</string>
+
+    <!-- slskd high-res source -->
+    <string name="slskd_integration">slskd (high-res)</string>
+    <string name="slskd_enable">Enable slskd source</string>
+    <string name="slskd_enable_desc">Show a per-track action that plays high-resolution audio from your own slskd server. YouTube Music stays the default.</string>
+    <string name="slskd_server_url">Server URL</string>
+    <string name="slskd_server_url_hint">http://host:5030</string>
+    <string name="slskd_api_key">API key</string>
+    <string name="slskd_api_key_desc">Use a named least-privilege key. It is stored on this device and sent only to your server.</string>
+    <string name="slskd_test_connection">Test connection</string>
+    <string name="slskd_testing">Testing…</string>
+    <string name="slskd_connected">Connected</string>
+    <string name="slskd_connected_no_auth">Connected (server has no authentication enabled)</string>
+    <string name="slskd_play_high_res">Play high-res via slskd</string>
+    <string name="slskd_revert_to_youtube">Revert to YouTube</string>
+    <string name="slskd_searching">Searching slskd…</string>
+    <string name="slskd_search_disclosure">Queries run against your own slskd server.</string>
+    <string name="slskd_no_results">No matching files found on slskd</string>
+    <string name="slskd_choose_file">Choose a file to play</string>
+    <string name="slskd_downloading">Downloading from Soulseek…</string>
+    <string name="slskd_queue_position">Queue position %1$d</string>
+    <string name="slskd_progress_percent">%1$d%% of %2$s</string>
+    <string name="slskd_downloaded_no_playback">Downloaded to your slskd server, but this server version can\'t stream to the phone. Update slskd to enable playback.</string>
+    <string name="slskd_seek_limited">Playing from slskd without seeking support on this server version. Update slskd for full seeking.</string>
+    <string name="slskd_error_credentials">slskd rejected the API key. Check the key and try again.</string>
+    <string name="slskd_error_relay_agent">That address is a slskd relay agent. Point Metrolist at a controller or standalone slskd server instead.</string>
+    <string name="slskd_error_forbidden">slskd refused the request. Check the key permissions.</string>
+    <string name="slskd_error_not_found">slskd couldn\'t find that search, download, or file. The peer may have gone offline.</string>
+    <string name="slskd_error_duplicate">slskd already has that download queued.</string>
+    <string name="slskd_error_rate_limited">slskd is already running a search or download. Wait for it to finish and try again.</string>
+    <string name="slskd_error_network">Couldn\'t reach the slskd server. Check the URL and your connection.</string>
+    <string name="slskd_error_timeout">The slskd server took too long to respond.</string>
+    <string name="slskd_error_server">The slskd server returned an error.</string>
+    <string name="slskd_error_config">Enter a valid server URL starting with http:// or https://.</string>
+    <string name="slskd_error_unexpected">Something went wrong talking to slskd.</string>
+    <string name="slskd_error_soulseek_disconnected">slskd isn\'t logged into Soulseek. Add your Soulseek username and password to slskd.yml and restart it.</string>
+    <string name="slskd_now_playing">Playing high-res via slskd</string>
+    <string name="slskd_buffering">Buffering high-res audio…</string>
+    <string name="slskd_fell_back">slskd stream failed, playing from YouTube instead</string>
+    <string name="slskd_reverted">Reverted to YouTube playback</string>
 </resources>

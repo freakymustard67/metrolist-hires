@@ -25,6 +25,9 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import com.metrolist.music.playback.audio.VolumeNormalizationAudioProcessor
+import com.metrolist.music.slskd.SlskdApiClient
+import com.metrolist.music.slskd.SlskdOverride
+import com.metrolist.music.slskd.SlskdOverrideStore
 import com.metrolist.music.utils.safeDataStoreEdit
 import android.net.ConnectivityManager
 import android.os.Binder
@@ -164,6 +167,8 @@ import com.metrolist.music.constants.ShufflePlaylistFirstKey
 import com.metrolist.music.constants.SimilarContent
 import com.metrolist.music.constants.SkipSilenceInstantKey
 import com.metrolist.music.constants.SkipSilenceKey
+import com.metrolist.music.constants.SlskdApiKeyKey
+import com.metrolist.music.constants.SlskdEnabledKey
 import com.metrolist.music.constants.StopMusicOnTaskClearKey
 import com.metrolist.music.db.MusicDatabase
 import com.metrolist.music.db.entities.Event
@@ -812,6 +817,7 @@ class MusicService :
                     Timber.tag(TAG).i("RELOADING STREAM: $mediaId at position ${currentPosition}ms")
 
                     songUrlCache.invalidate(mediaId)
+                    SlskdOverrideStore.remove(mediaId)
 
                     // CRITICAL: Clear caches synchronously to prevent format parsing errors
                     runBlocking(Dispatchers.IO) {
@@ -2183,6 +2189,44 @@ class MusicService :
         }
     }
 
+    fun setSlskdOverride(
+        mediaId: String,
+        fileUrl: String,
+        transferId: String?,
+    ) {
+        SlskdOverrideStore.put(SlskdOverride(mediaId, fileUrl, transferId))
+        retrySlskdMedia(mediaId)
+        toastOnMain(R.string.slskd_now_playing)
+    }
+
+    fun clearSlskdOverride(mediaId: String) {
+        SlskdOverrideStore.remove(mediaId)
+        retrySlskdMedia(mediaId)
+        toastOnMain(R.string.slskd_reverted)
+    }
+
+    private fun toastOnMain(messageRes: Int) {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(this@MusicService, getString(messageRes), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun retrySlskdMedia(mediaId: String) {
+        scope.launch {
+            performAggressiveCacheClear(mediaId)
+            val retryIndex = player.currentMediaItemIndex
+            if (player.currentMediaItem?.mediaId != mediaId || retryIndex == C.INDEX_UNSET) {
+                return@launch
+            }
+            delay(RETRY_DELAY_MS)
+            if (player.currentMediaItem?.mediaId != mediaId || player.currentMediaItemIndex != retryIndex) {
+                return@launch
+            }
+            player.seekTo(retryIndex, player.currentPosition)
+            player.prepare()
+        }
+    }
+
     fun addToTargetPlaylist() {
         scope.launch {
             val currentSong = currentSong.first() ?: return@launch
@@ -3023,6 +3067,12 @@ class MusicService :
             return
         }
 
+        if (mediaId != null && SlskdOverrideStore.contains(mediaId)) {
+            Timber.tag(TAG).w("slskd stream failed for $mediaId, falling back to YouTube")
+            handleSlskdStreamError(mediaId)
+            return
+        }
+
         if (mediaId != null) {
             performAggressiveCacheClear(mediaId)
         }
@@ -3372,6 +3422,33 @@ class MusicService :
                 player.prepare()
 
                 Timber.tag(TAG).d("Retrying playback for $mediaId after IO_FILE_NOT_FOUND")
+            }
+    }
+
+    /**
+     * Drops a failed slskd override and retries the same item so the resolver
+     * falls through to the regular YouTube path.
+     */
+    private fun handleSlskdStreamError(mediaId: String) {
+        SlskdOverrideStore.remove(mediaId)
+        incrementRetryCount(mediaId)
+        toastOnMain(R.string.slskd_fell_back)
+
+        retryJob?.cancel()
+        retryJob =
+            scope.launch {
+                performAggressiveCacheClear(mediaId)
+                delay(RETRY_DELAY_MS)
+                val currentPosition = player.currentPosition
+                val currentIndex = player.currentMediaItemIndex
+                if (player.currentMediaItem?.mediaId != mediaId || currentIndex == C.INDEX_UNSET) {
+                    Timber.tag(TAG).w("Stale slskd fallback for $mediaId, skipping retry")
+                    return@launch
+                }
+                player.seekTo(currentIndex, currentPosition)
+                player.prepare()
+
+                Timber.tag(TAG).d("Retrying playback for $mediaId on YouTube after slskd failure")
             }
     }
 
@@ -3772,6 +3849,28 @@ class MusicService :
     ): DataSource.Factory {
         return ResolvingDataSource.Factory(createCacheDataSource()) { dataSpec ->
             val mediaId = dataSpec.key ?: error("No media id")
+            SlskdOverrideStore.get(mediaId)?.let { override ->
+                if (dataStore.get(SlskdEnabledKey, false)) {
+                    applyAudioNormalizationBeforePlayback(
+                        processor = normalizationProcessor,
+                        playerProvider = playerProvider,
+                        mediaId = mediaId,
+                        loudnessDb = null,
+                        perceptualLoudnessDb = null,
+                        preserveCachedIfMissing = true,
+                    )
+                    recoverSongDeduped(mediaId)
+                    currentStreamClient.value = SLSKD_CLIENT_NAME
+                    return@Factory dataSpec.withResolvedStream(
+                        CachedStreamUrl(
+                            url = override.fileUrl,
+                            requestHeaders = mapOf(SlskdApiClient.API_KEY_HEADER to dataStore.get(SlskdApiKeyKey, "")),
+                            clientName = SLSKD_CLIENT_NAME,
+                        ),
+                    )
+                }
+            }
+
             val storedFormat = runBlocking(Dispatchers.IO) { database.format(mediaId).first() }
             applyAudioNormalizationBeforePlayback(
                 processor = normalizationProcessor,
@@ -4993,6 +5092,7 @@ class MusicService :
         private const val INITIAL_BUFFER_RECOVERY_DELAY_MS = 15_000L
         private const val INITIAL_BUFFER_RECOVERY_POSITION_MS = 5_000L
         private const val TAG = "MusicService"
+        const val SLSKD_CLIENT_NAME = "slskd"
 
         @Volatile
         var isRunning = false

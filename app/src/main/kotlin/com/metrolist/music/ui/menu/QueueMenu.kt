@@ -451,8 +451,18 @@ fun QueueMenu(
 
         // Navigation section (Artist, Album)
         item {
+            val slskdMenuItems =
+                rememberSlskdMenuItems(
+                    mediaId = mediaMetadata.id,
+                    artistName = mediaMetadata.artists.joinToString(", ") { it.name },
+                    title = mediaMetadata.title,
+                    service = playerConnection.service,
+                    onMenuDismiss = onDismiss,
+                )
+
             Material3MenuGroup(
                 items = buildList {
+                    addAll(slskdMenuItems)
                     if (artists.isNotEmpty()) {
                         add(
                             Material3MenuItemData(

@@ -52,6 +52,13 @@ fun IntegrationScreen(
                     onClick = {
                         navController.navigate("settings/integrations/lastfm")
                     }
+                ),
+                IntegrationCardItem(
+                    icon = painterResource(R.drawable.cloud),
+                    title = { Text(stringResource(R.string.slskd_integration)) },
+                    onClick = {
+                        navController.navigate("settings/integrations/slskd")
+                    }
                 )
             )
         )

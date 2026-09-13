@@ -386,9 +386,19 @@ fun PlayerMenu(
             // Check if this is a podcast episode (album ID doesn't start with MPREb_)
             val isPodcast = mediaMetadata.album?.let { !it.id.startsWith("MPREb_") } ?: false
 
+            val slskdMenuItems =
+                rememberSlskdMenuItems(
+                    mediaId = mediaMetadata.id,
+                    artistName = mediaMetadata.artists.joinToString(", ") { it.name },
+                    title = mediaMetadata.title,
+                    service = playerConnection.service,
+                    onMenuDismiss = onDismiss,
+                )
+
             Material3MenuGroup(
                 items =
                     buildList {
+                        addAll(slskdMenuItems)
                         // Don't show "View Artist" for podcasts - only show "View Podcast"
                         if (artists.isNotEmpty() && !isPodcast) {
                             add(

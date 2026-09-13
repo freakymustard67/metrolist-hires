@@ -966,9 +966,19 @@ fun SongMenu(
         item { Spacer(modifier = Modifier.height(12.dp)) }
 
         item {
+            val slskdMenuItems =
+                rememberSlskdMenuItems(
+                    mediaId = song.id,
+                    artistName = song.orderedArtists.joinToString(", ") { it.name },
+                    title = song.song.title,
+                    service = playerConnection.service,
+                    onMenuDismiss = onDismiss,
+                )
+
             Material3MenuGroup(
                 items =
                     buildList {
+                        addAll(slskdMenuItems)
                         // Don't show "View Artist" for podcast episodes
                         if (!song.song.isEpisode) {
                             add(
