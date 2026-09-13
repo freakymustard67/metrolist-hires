@@ -93,6 +93,20 @@ internal data class RecommendationsCache(
 )
 
 /**
+ * Picks the seeds for the recommendation row: recent plays first, one liked song mixed in,
+ * then whatever is left as top-up. A song that is both recent and liked is used once.
+ */
+internal fun buildRecommendationSeeds(
+    recent: List<Song>,
+    liked: List<Song>,
+    count: Int = 3,
+): List<RecommendationSeed> =
+    (recent.take(2) + liked.take(1) + recent.drop(2) + liked.drop(1))
+        .distinctBy { it.id }
+        .take(count)
+        .map { RecommendationSeed(id = it.id, title = it.title) }
+
+/**
  * Interleaves the fetched related songs by seed. A song suggested by several seeds is
  * credited to the first one, and a seed never recommends itself.
  */
@@ -321,13 +335,13 @@ suspend fun getRandomItem(): YTItem? {
     private suspend fun recommendationSeeds(): List<RecommendationSeed> {
         val hideVideoSongs = context.dataStore.get(HideVideoSongsKey, false)
 
-        return (
-            database.recentSongs(RECOMMENDATION_SEED_COUNT).first() +
-                database.likedSongsByCreateDateDesc(limit = RECOMMENDATION_SEED_COUNT, offset = 0)
-        ).filterVideoSongs(hideVideoSongs)
-            .distinctBy { it.id }
-            .take(RECOMMENDATION_SEED_COUNT)
-            .map { RecommendationSeed(id = it.id, title = it.title) }
+        val recent = database.recentSongs(RECOMMENDATION_SEED_COUNT).first()
+        val liked = database.likedSongsByCreateDateDesc(limit = RECOMMENDATION_SEED_COUNT, offset = 0)
+
+        return buildRecommendationSeeds(
+            recent = recent.filterVideoSongs(hideVideoSongs),
+            liked = liked.filterVideoSongs(hideVideoSongs),
+        )
     }
 
     private suspend fun readRecommendationsCache(): RecommendationsCache? =

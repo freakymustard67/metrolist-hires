@@ -2,6 +2,8 @@ package com.metrolist.music.viewmodels
 
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.SongItem
+import com.metrolist.music.db.entities.Song
+import com.metrolist.music.db.entities.SongEntity
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -13,11 +15,11 @@ class RecommendationsTest {
                 RecommendationSeed(id = "seed-1", title = "First seed"),
                 RecommendationSeed(id = "seed-2", title = "Second seed"),
             )
-        val shared = song("shared")
+        val shared = ytSong("shared")
         val related =
             mapOf(
                 "seed-1" to listOf(shared),
-                "seed-2" to listOf(shared, song("only-second")),
+                "seed-2" to listOf(shared, ytSong("only-second")),
             )
 
         val result = buildRecommendations(seeds, related)
@@ -29,7 +31,7 @@ class RecommendationsTest {
     @Test
     fun `a seed never recommends itself`() {
         val seed = RecommendationSeed(id = "seed", title = "Seed")
-        val related = mapOf("seed" to listOf(song("seed"), song("other")))
+        val related = mapOf("seed" to listOf(ytSong("seed"), ytSong("other")))
 
         val result = buildRecommendations(listOf(seed), related)
 
@@ -39,7 +41,7 @@ class RecommendationsTest {
     @Test
     fun `each seed contributes at most perSeed songs`() {
         val seeds = listOf(RecommendationSeed(id = "seed", title = "Seed"))
-        val related = mapOf("seed" to (1..10).map { song("song-$it") })
+        val related = mapOf("seed" to (1..10).map { ytSong("song-$it") })
 
         val result = buildRecommendations(seeds, related, perSeed = 3)
 
@@ -55,8 +57,8 @@ class RecommendationsTest {
             )
         val related =
             mapOf(
-                "seed-1" to (1..4).map { song("first-$it") },
-                "seed-2" to (1..4).map { song("second-$it") },
+                "seed-1" to (1..4).map { ytSong("first-$it") },
+                "seed-2" to (1..4).map { ytSong("second-$it") },
             )
 
         val result = buildRecommendations(seeds, related, perSeed = 4, limit = 5)
@@ -72,12 +74,47 @@ class RecommendationsTest {
                 RecommendationSeed(id = "seed", title = "Seed"),
             )
 
-        val result = buildRecommendations(seeds, mapOf("seed" to listOf(song("only"))))
+        val result = buildRecommendations(seeds, mapOf("seed" to listOf(ytSong("only"))))
 
         assertEquals(listOf("only"), result.map { it.id })
     }
 
+    @Test
+    fun `seeds mix two recent plays with one liked song`() {
+        val recent = listOf(song("recent-1"), song("recent-2"), song("recent-3"))
+        val liked = listOf(song("liked-1"), song("liked-2"))
+
+        val seeds = buildRecommendationSeeds(recent, liked)
+
+        assertEquals(listOf("recent-1", "recent-2", "liked-1"), seeds.map { it.id })
+    }
+
+    @Test
+    fun `a song that is both recent and liked is only used once`() {
+        val recent = listOf(song("both"), song("recent-2"))
+        val liked = listOf(song("both"), song("liked-1"))
+
+        val seeds = buildRecommendationSeeds(recent, liked)
+
+        assertEquals(listOf("both", "recent-2", "liked-1"), seeds.map { it.id })
+    }
+
+    @Test
+    fun `seeds fall back to liked songs when nothing was played recently`() {
+        val liked = listOf(song("liked-1"), song("liked-2"), song("liked-3"))
+
+        val seeds = buildRecommendationSeeds(recent = emptyList(), liked = liked)
+
+        assertEquals(listOf("liked-1", "liked-2", "liked-3"), seeds.map { it.id })
+    }
+
     private fun song(id: String) =
+        Song(
+            song = SongEntity(id = id, title = id),
+            artists = emptyList(),
+        )
+
+    private fun ytSong(id: String) =
         SongItem(
             id = id,
             title = id,
