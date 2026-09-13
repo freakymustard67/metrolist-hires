@@ -393,7 +393,14 @@ private fun NewMiniPlayer(
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                         mediaMetadata?.thumbnailUrl?.let { url ->
                             AsyncImage(
-                                model = url,
+                                model =
+                                    remember(url) {
+                                        ImageRequest
+                                            .Builder(context)
+                                            .data(url)
+                                            .size(300, 300)
+                                            .build()
+                                    },
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
@@ -507,6 +514,7 @@ private fun NewMiniPlayerPlayButton(
     outlineColor: Color,
     listenTogetherManager: ListenTogetherManager?,
 ) {
+    val context = LocalContext.current
     val isPlaying by playerConnection.isPlaying.collectAsState()
     val castIsPlaying by castHandler?.castIsPlaying?.collectAsState() ?: remember { mutableStateOf(false) }
     val effectiveIsPlaying = if (isCasting) castIsPlaying else isPlaying
@@ -582,7 +590,16 @@ private fun NewMiniPlayerPlayButton(
                         metadata.thumbnailUrl?.resize(120, 120)
                     }
                 AsyncImage(
-                    model = thumbnailUrl,
+                    model =
+                        remember(thumbnailUrl) {
+                            thumbnailUrl?.let {
+                                ImageRequest
+                                    .Builder(context)
+                                    .data(it)
+                                    .size(120, 120)
+                                    .build()
+                            }
+                        },
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize().clip(CircleShape),
@@ -941,6 +958,7 @@ private fun LegacyMiniMediaInfo(
     pureBlack: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val error by LocalPlayerConnection.current?.error?.collectAsState() ?: remember { mutableStateOf(null) }
     val cropAlbumArt by rememberPreference(CropAlbumArtKey, false)
 
@@ -967,7 +985,16 @@ private fun LegacyMiniMediaInfo(
                     mediaMetadata.thumbnailUrl?.resize(144, 144)
                 }
             AsyncImage(
-                model = thumbnailUrl,
+                model =
+                    remember(thumbnailUrl) {
+                        thumbnailUrl?.let {
+                            ImageRequest
+                                .Builder(context)
+                                .data(it)
+                                .size(144, 144)
+                                .build()
+                        }
+                    },
                 contentDescription = null,
                 contentScale = if (cropAlbumArt) ContentScale.Crop else ContentScale.Fit,
                 modifier =

@@ -8,8 +8,11 @@ package com.metrolist.music.ui.theme
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
@@ -26,6 +29,19 @@ import com.materialkolor.rememberDynamicColorScheme
 import com.materialkolor.score.Score
 
 val DefaultThemeColor = Color(0xFFED5564)
+
+/**
+ * Shape scale for the app. Components that need a specific radius still pass their own
+ * `RoundedCornerShape`; this is what Material surfaces (cards, sheets, dialogs, menus)
+ * inherit, so they stop drifting apart.
+ */
+val AppShapes = Shapes(
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(14.dp),
+    large = RoundedCornerShape(20.dp),
+    extraLarge = RoundedCornerShape(28.dp),
+)
 
 @Composable
 fun MetrolistTheme(
@@ -64,6 +80,7 @@ fun MetrolistTheme(
     // Use standard MaterialTheme instead of MaterialExpressiveTheme
     MaterialTheme(
         colorScheme = colorScheme,
+        shapes = AppShapes,
         content = content,
     )
 }

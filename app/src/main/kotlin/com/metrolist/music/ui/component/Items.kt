@@ -47,7 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -89,6 +89,7 @@ import androidx.media3.exoplayer.offline.Download.STATE_DOWNLOADING
 import androidx.media3.exoplayer.offline.Download.STATE_QUEUED
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.AlbumItem
 import com.metrolist.innertube.models.ArtistItem
@@ -98,8 +99,9 @@ import com.metrolist.innertube.models.PodcastItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import com.metrolist.music.LocalDatabase
+import com.metrolist.music.LocalDownloads
+import com.metrolist.music.LocalSwipeToSongEnabled
 import com.metrolist.music.LocalArtistNameAliases
-import com.metrolist.music.LocalDownloadUtil
 import com.metrolist.music.LocalNavController
 import com.metrolist.music.LocalPlayerConnection
 import com.metrolist.music.R
@@ -110,7 +112,6 @@ import com.metrolist.music.constants.GridThumbnailHeight
 import com.metrolist.music.constants.ListItemHeight
 import com.metrolist.music.constants.ListThumbnailSize
 import com.metrolist.music.constants.SmallGridThumbnailHeight
-import com.metrolist.music.constants.SwipeToSongKey
 import com.metrolist.music.constants.ThumbnailCornerRadius
 import com.metrolist.music.db.entities.Album
 import com.metrolist.music.db.entities.Artist
@@ -479,6 +480,33 @@ fun GridItem(
     fillMaxWidth = fillMaxWidth
 )
 
+/**
+ * The app collects the download map once (see `LocalDownloads`); a row derives only its own
+ * entry, so a progress tick for another song no longer recomposes it.
+ */
+@Composable
+private fun downloadStateOf(songId: String): Int? {
+    val downloads = LocalDownloads.current
+    val state by remember(songId) { derivedStateOf { downloads.value[songId]?.state } }
+    return state
+}
+
+@Composable
+private fun downloadStateOf(songIds: List<String>): Int {
+    val downloads = LocalDownloads.current
+    val state by remember(songIds) {
+        derivedStateOf {
+            when {
+                songIds.isEmpty() -> Download.STATE_STOPPED
+                songIds.all { downloads.value[it]?.state == STATE_COMPLETED } -> STATE_COMPLETED
+                songIds.any { downloads.value[it]?.state in listOf(STATE_QUEUED, STATE_DOWNLOADING) } -> STATE_DOWNLOADING
+                else -> Download.STATE_STOPPED
+            }
+        }
+    }
+    return state
+}
+
 @Composable
 fun SongListItem(
     song: Song,
@@ -499,9 +527,7 @@ fun SongListItem(
             Icon.Library()
         }
         if (showDownloadIcon) {
-            val download by LocalDownloadUtil.current.getDownload(song.id)
-                .collectAsStateWithLifecycle(initialValue = null)
-            Icon.Download(download?.state)
+            Icon.Download(downloadStateOf(song.id))
         }
     },
     isSelected: Boolean = false,
@@ -511,7 +537,7 @@ fun SongListItem(
     trailingContent: @Composable RowScope.() -> Unit = {},
 ) {
     val artistNameAliases = LocalArtistNameAliases.current
-    val swipeEnabled by rememberPreference(SwipeToSongKey, defaultValue = false)
+    val swipeEnabled = LocalSwipeToSongEnabled.current
 
     val content: @Composable () -> Unit = {
          ListItem(
@@ -589,8 +615,7 @@ fun SongGridItem(
             Icon.Library()
         }
         if (showDownloadIcon) {
-            val download by LocalDownloadUtil.current.getDownload(song.id).collectAsStateWithLifecycle(initialValue = null)
-            Icon.Download(download?.state)
+            Icon.Download(downloadStateOf(song.id))
         }
     },
     isActive: Boolean = false,
@@ -699,6 +724,7 @@ fun ArtistGridItem(
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(artist.artist.thumbnailUrl?.resize(544, 544))
+                .crossfade(false)
                 .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
                 .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
                 .networkCachePolicy(coil3.request.CachePolicy.ENABLED)
@@ -720,30 +746,13 @@ fun AlbumListItem(
     modifier: Modifier = Modifier,
     showLikedIcon: Boolean = true,
     badges: @Composable RowScope.() -> Unit = {
-        val downloadUtil = LocalDownloadUtil.current
         val database = LocalDatabase.current
 
-        val songs by produceState<List<Song>>(initialValue = emptyList(), album.id) {
-            withContext(Dispatchers.IO) {
-                value = database.albumSongs(album.id).first()
-            }
+        val songIds by produceState<List<String>>(initialValue = emptyList(), album.id) {
+            withContext(Dispatchers.IO) { value = database.songIdsInAlbum(album.id) }
         }
 
-        val allDownloads by downloadUtil.downloads.collectAsStateWithLifecycle()
-
-        val downloadState by remember(songs, allDownloads) {
-            androidx.compose.runtime.mutableIntStateOf(
-                if (songs.isEmpty()) {
-                    Download.STATE_STOPPED
-                } else {
-                    when {
-                        songs.all { allDownloads[it.id]?.state == STATE_COMPLETED } -> STATE_COMPLETED
-                        songs.any { allDownloads[it.id]?.state in listOf(STATE_QUEUED, STATE_DOWNLOADING) } -> STATE_DOWNLOADING
-                        else -> Download.STATE_STOPPED
-                    }
-                }
-            )
-        }
+        val downloadState = downloadStateOf(songIds)
 
         if (showLikedIcon && album.album.bookmarkedAt != null) {
             Icon.Favorite()
@@ -791,30 +800,13 @@ fun AlbumGridItem(
     modifier: Modifier = Modifier,
     coroutineScope: CoroutineScope,
     badges: @Composable RowScope.() -> Unit = {
-        val downloadUtil = LocalDownloadUtil.current
         val database = LocalDatabase.current
 
-        val songs by produceState<List<Song>>(initialValue = emptyList(), album.id) {
-            withContext(Dispatchers.IO) {
-                value = database.albumSongs(album.id).first()
-            }
+        val songIds by produceState<List<String>>(initialValue = emptyList(), album.id) {
+            withContext(Dispatchers.IO) { value = database.songIdsInAlbum(album.id) }
         }
 
-        val allDownloads by downloadUtil.downloads.collectAsStateWithLifecycle()
-
-        val downloadState by remember(songs, allDownloads) {
-            androidx.compose.runtime.mutableIntStateOf(
-                if (songs.isEmpty()) {
-                    Download.STATE_STOPPED
-                } else {
-                    when {
-                        songs.all { allDownloads[it.id]?.state == STATE_COMPLETED } -> STATE_COMPLETED
-                        songs.any { allDownloads[it.id]?.state in listOf(STATE_QUEUED, STATE_DOWNLOADING) } -> STATE_DOWNLOADING
-                        else -> Download.STATE_STOPPED
-                    }
-                }
-            )
-        }
+        val downloadState = downloadStateOf(songIds)
 
         if (album.album.bookmarkedAt != null) {
             Icon.Favorite()
@@ -884,30 +876,13 @@ fun PlaylistListItem(
     modifier: Modifier = Modifier,
     autoPlaylist: Boolean = false,
     badges: @Composable RowScope.() -> Unit = {
-        val downloadUtil = LocalDownloadUtil.current
         val database = LocalDatabase.current
 
-        val songs by produceState<List<Song>>(initialValue = emptyList(), playlist.id) {
-            withContext(Dispatchers.IO) {
-                value = database.playlistSongs(playlist.id).first().map { it.song }
-            }
+        val songIds by produceState<List<String>>(initialValue = emptyList(), playlist.id) {
+            withContext(Dispatchers.IO) { value = database.songIdsInPlaylist(playlist.id) }
         }
 
-        val allDownloads by downloadUtil.downloads.collectAsStateWithLifecycle()
-
-        val downloadState by remember(songs, allDownloads) {
-            androidx.compose.runtime.mutableIntStateOf(
-                if (songs.isEmpty()) {
-                    Download.STATE_STOPPED
-                } else {
-                    when {
-                        songs.all { allDownloads[it.id]?.state == STATE_COMPLETED } -> STATE_COMPLETED
-                        songs.any { allDownloads[it.id]?.state in listOf(STATE_QUEUED, STATE_DOWNLOADING) } -> STATE_DOWNLOADING
-                        else -> Download.STATE_STOPPED
-                    }
-                }
-            )
-        }
+        val downloadState = downloadStateOf(songIds)
 
         Icon.Download(downloadState)
     },
@@ -965,30 +940,13 @@ fun PlaylistGridItem(
     modifier: Modifier = Modifier,
     autoPlaylist: Boolean = false,
     badges: @Composable RowScope.() -> Unit = {
-        val downloadUtil = LocalDownloadUtil.current
         val database = LocalDatabase.current
 
-        val songs by produceState<List<Song>>(initialValue = emptyList(), playlist.id) {
-            withContext(Dispatchers.IO) {
-                value = database.playlistSongs(playlist.id).first().map { it.song }
-            }
+        val songIds by produceState<List<String>>(initialValue = emptyList(), playlist.id) {
+            withContext(Dispatchers.IO) { value = database.songIdsInPlaylist(playlist.id) }
         }
 
-        val allDownloads by downloadUtil.downloads.collectAsStateWithLifecycle()
-
-        val downloadState by remember(songs, allDownloads) {
-            mutableIntStateOf(
-                if (songs.isEmpty()) {
-                    Download.STATE_STOPPED
-                } else {
-                    when {
-                        songs.all { allDownloads[it.id]?.state == STATE_COMPLETED } -> STATE_COMPLETED
-                        songs.any { allDownloads[it.id]?.state in listOf(STATE_QUEUED, STATE_DOWNLOADING) } -> STATE_DOWNLOADING
-                        else -> Download.STATE_STOPPED
-                    }
-                }
-            )
-        }
+        val downloadState = downloadStateOf(songIds)
 
         Icon.Download(downloadState)
     },
@@ -1129,16 +1087,14 @@ fun YouTubeListItem(
     trailingContent: @Composable RowScope.() -> Unit = {},
     badges: @Composable RowScope.() -> Unit = {
         val database = LocalDatabase.current
-        val song by produceState<Song?>(initialValue = null, item.id) {
-            if (item is SongItem) value = database.song(item.id).firstOrNull()
+        val songLiked by produceState<Boolean?>(initialValue = null, item.id) {
+            if (item is SongItem) value = withContext(Dispatchers.IO) { database.songLiked(item.id) }
         }
-        val album by produceState<Album?>(initialValue = null, item.id) {
-            if (item is AlbumItem) value = database.album(item.id).firstOrNull()
+        val albumBookmarked by produceState<Boolean?>(initialValue = null, item.id) {
+            if (item is AlbumItem) value = withContext(Dispatchers.IO) { database.albumBookmarkedAt(item.id) != null }
         }
 
-        if ((item is SongItem && song?.song?.liked == true) ||
-            (item is AlbumItem && album?.album?.bookmarkedAt != null)
-        ) {
+        if ((item is SongItem && songLiked == true) || (item is AlbumItem && albumBookmarked == true)) {
             Icon.Favorite()
         }
         if (item.explicit) Icon.Explicit()
@@ -1146,12 +1102,11 @@ fun YouTubeListItem(
         //     Icon.Library()
         // }
         if (item is SongItem) {
-            val download by LocalDownloadUtil.current.getDownload(item.id).collectAsStateWithLifecycle(null)
-            Icon.Download(download?.state)
+            Icon.Download(downloadStateOf(item.id))
         }
     },
 ) {
-    val swipeEnabled by rememberPreference(SwipeToSongKey, defaultValue = false)
+    val swipeEnabled = LocalSwipeToSongEnabled.current
     val artistNameAliases = LocalArtistNameAliases.current
     val artistSeparator = " ${stringResource(R.string.and)} "
 
@@ -1236,23 +1191,22 @@ fun YouTubeGridItem(
     coroutineScope: CoroutineScope? = null,
     badges: @Composable RowScope.() -> Unit = {
         val database = LocalDatabase.current
-        val song by produceState<Song?>(initialValue = null, item.id) {
-            if (item is SongItem) value = database.song(item.id).firstOrNull()
+        val songLiked by produceState<Boolean?>(initialValue = null, item.id) {
+            if (item is SongItem) value = withContext(Dispatchers.IO) { database.songLiked(item.id) }
         }
-        val album by produceState<Album?>(initialValue = null, item.id) {
-            if (item is AlbumItem) value = database.album(item.id).firstOrNull()
+        val albumBookmarked by produceState<Boolean?>(initialValue = null, item.id) {
+            if (item is AlbumItem) value = withContext(Dispatchers.IO) { database.albumBookmarkedAt(item.id) != null }
         }
 
-        if (item is SongItem && song?.song?.liked == true ||
-            item is AlbumItem && album?.album?.bookmarkedAt != null
+        if (item is SongItem && songLiked == true ||
+            item is AlbumItem && albumBookmarked == true
         ) {
             Icon.Favorite()
         }
         if (item.explicit) Icon.Explicit()
         // if (item is SongItem && song?.song?.inLibrary != null) Icon.Library()
         if (item is SongItem) {
-            val download by LocalDownloadUtil.current.getDownload(item.id).collectAsStateWithLifecycle(null)
-            Icon.Download(download?.state)
+            Icon.Download(downloadStateOf(item.id))
         }
     },
     thumbnailRatio: Float = if (item is SongItem) 16f / 9 else 1f,
@@ -1490,6 +1444,7 @@ fun ItemThumbnail(
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(thumbnailUrl?.resize(544, 544))
+                    .crossfade(false)
                     .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
                     .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
                     .networkCachePolicy(coil3.request.CachePolicy.ENABLED)
@@ -1681,6 +1636,7 @@ fun PlaylistThumbnail(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(thumbnails[0].resize((size.value * 3).toInt()))
                 .apply { /* Removed cache key extensions due to unresolved in env */ }
+                .crossfade(false)
                 .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
                 .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
                 .networkCachePolicy(coil3.request.CachePolicy.ENABLED)
@@ -1708,6 +1664,7 @@ fun PlaylistThumbnail(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(thumbnails.getOrNull(index)?.resize((size.value * 1.5).toInt()))
                         .apply { /* Removed cache key extensions due to unresolved in env */ }
+                        .crossfade(false)
                         .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
                         .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
                         .networkCachePolicy(coil3.request.CachePolicy.ENABLED)

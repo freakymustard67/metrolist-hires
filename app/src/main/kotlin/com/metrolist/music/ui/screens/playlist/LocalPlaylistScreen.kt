@@ -261,9 +261,13 @@ fun LocalPlaylistScreen(
     }
 
     LaunchedEffect(songs) {
-        mutableSongs.apply {
-            clear()
-            addAll(songs)
+        // Rebuild the local snapshot only when the collected list content actually changed.
+        // Clear/refill on every emission invalidates every row and defeats stable keys.
+        if (mutableSongs.toList() != songs) {
+            mutableSongs.apply {
+                clear()
+                addAll(songs)
+            }
         }
         if (songs.isEmpty()) return@LaunchedEffect
         downloadUtil.downloads.collect { downloads ->

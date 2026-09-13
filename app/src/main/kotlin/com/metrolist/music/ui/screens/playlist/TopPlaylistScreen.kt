@@ -114,7 +114,6 @@ fun TopPlaylistScreen(
     val maxSize = viewModel.top
 
     val songs by viewModel.topSongs.collectAsStateWithLifecycle(null)
-    val mutableSongs = remember { mutableStateListOf<Song>() }
 
     val likeLength = remember(songs) {
         songs?.fastSumBy { it.song.duration } ?: 0
@@ -180,10 +179,6 @@ fun TopPlaylistScreen(
     var downloadState by remember { mutableIntStateOf(Download.STATE_STOPPED) }
 
     LaunchedEffect(songs) {
-        mutableSongs.apply {
-            clear()
-            songs?.let { addAll(it) }
-        }
         if (songs?.isEmpty() == true) return@LaunchedEffect
         downloadUtil.downloads.collect { downloads ->
             downloadState =

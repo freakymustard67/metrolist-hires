@@ -66,10 +66,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -110,7 +112,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.palette.graphics.Palette
-import coil3.ImageLoader
+import coil3.imageLoader
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.toBitmap
@@ -359,6 +361,18 @@ fun OriginalLyrics(
         }
     val isSynced = remember(lyrics) { lyricsTextLooksSynced(lyrics) }
 
+    // Per-line romanization/translation flows are collected once for the whole
+    // screen instead of once per rendered row. Rows read their own entry's value
+    // through a derived state so they only recompose when their own text changes.
+    val romanizedTexts = remember(lines) { mutableStateMapOf<LyricsEntry, String?>() }
+    val translatedTexts = remember(lines) { mutableStateMapOf<LyricsEntry, String?>() }
+    LaunchedEffect(lines) {
+        lines.forEach { entry ->
+            launch { entry.romanizedTextFlow.collect { romanizedTexts[entry] = it } }
+            launch { entry.translatedTextFlow.collect { translatedTexts[entry] = it } }
+        }
+    }
+
     // State for translation status
     val translationStatus by LyricsTranslationHelper.status.collectAsStateWithLifecycle()
 
@@ -438,6 +452,10 @@ fun OriginalLyrics(
     }
     var currentPlaybackPosition by remember {
         mutableLongStateOf(0L)
+    }
+    // Observed playback flag used to suspend per-line glow pulsing while paused.
+    var isPlayingState by remember {
+        mutableStateOf(playerConnection.player.isPlaying)
     }
     // Because LaunchedEffect has delay, which leads to inconsistent with current line color and scroll animation,
     // we use deferredCurrentLineIndex when user is scrolling
@@ -565,6 +583,8 @@ fun OriginalLyrics(
             isSeeking = sliderPosition != null
             val position = sliderPosition ?: playerConnection.player.currentPosition
             currentPlaybackPosition = position
+            val playing = playerConnection.player.isPlaying
+            if (playing != isPlayingState) isPlayingState = playing
             val lyricsOffset = currentSong?.song?.lyricsOffset ?: 0
             currentLineIndex = findCurrentLineIndex(lines, position + lyricsOffset)
         }
@@ -1075,8 +1095,7 @@ fun OriginalLyrics(
                                 }
                             val alignment = agentTextAlign
 
-                            val romanizedTextState by item.romanizedTextFlow.collectAsStateWithLifecycle()
-                            val romanizedText = romanizedTextState
+                            val romanizedText = remember(item) { derivedStateOf { romanizedTexts[item] } }.value
                             val isRomanizedAvailable = romanizedText != null
 
                             val mainText = if (romanizeAsMain && isRomanizedAvailable) romanizedText else item.text
@@ -1576,18 +1595,22 @@ fun OriginalLyrics(
                                     )
                                 }
 
-                                // Continuous slow pulsing animation
-                                LaunchedEffect(Unit) {
-                                    while (true) {
-                                        pulseProgress.animateTo(
-                                            targetValue = 1f,
-                                            animationSpec =
-                                                tween(
-                                                    durationMillis = 3000,
-                                                    easing = LinearEasing,
-                                                ),
-                                        )
-                                        pulseProgress.snapTo(0f)
+                                // Continuous slow pulsing animation.
+                                // Runs only while this line is the active one and playback is
+                                // actually progressing; paused playback freezes the pulse.
+                                LaunchedEffect(isActiveLine, isPlayingState) {
+                                    if (isActiveLine && isPlayingState) {
+                                        while (isActive) {
+                                            pulseProgress.animateTo(
+                                                targetValue = 1f,
+                                                animationSpec =
+                                                    tween(
+                                                        durationMillis = 3000,
+                                                        easing = LinearEasing,
+                                                    ),
+                                            )
+                                            pulseProgress.snapTo(0f)
+                                        }
                                     }
                                 }
 
@@ -1690,7 +1713,7 @@ fun OriginalLyrics(
                             }
 
                             // Show translated text if available
-                            val translatedText by item.translatedTextFlow.collectAsStateWithLifecycle()
+                            val translatedText by remember(item) { derivedStateOf { translatedTexts[item] } }
                             translatedText?.let { translated ->
                                 Text(
                                     text = translated,
@@ -1967,7 +1990,7 @@ fun OriginalLyrics(
                 if (coverUrl != null) {
                     withContext(Dispatchers.IO) {
                         try {
-                            val loader = ImageLoader(context)
+                            val loader = context.imageLoader
                             val req =
                                 ImageRequest
                                     .Builder(context)

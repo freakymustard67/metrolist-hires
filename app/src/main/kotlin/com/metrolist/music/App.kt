@@ -91,9 +91,9 @@ class App :
         Timber.plant(Timber.DebugTree())
         InnerTubeXPlayer.initialize(this)
 
-        // Pre-read Coil cache size on background to avoid runBlocking in newImageLoader
+        // Pre-read Coil cache size on background to avoid blocking loader creation
         applicationScope.launch(Dispatchers.IO) {
-            cachedCoilCacheSize = dataStore.data.map { it[MaxImageCacheSizeKey] ?: 512 }.first()
+            cachedCoilCacheSize = dataStore.data.map { it[MaxImageCacheSizeKey] ?: DEFAULT_IMAGE_CACHE_SIZE }.first()
         }
 
         // تهيئة إعدادات التطبيق عند الإقلاع
@@ -296,8 +296,13 @@ class App :
     private var cachedCoilCacheSize: Int? = null
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
-        val cacheSize = cachedCoilCacheSize ?: runBlocking {
-            dataStore.data.map { it[MaxImageCacheSizeKey] ?: 512 }.first()
+        // Never block loader creation on DataStore: prefer the value we already cached, fall
+        // back to the default, and refresh the cache in the background for the next launch.
+        val cacheSize = cachedCoilCacheSize ?: DEFAULT_IMAGE_CACHE_SIZE
+        if (cachedCoilCacheSize == null) {
+            applicationScope.launch(Dispatchers.IO) {
+                cachedCoilCacheSize = dataStore.data.map { it[MaxImageCacheSizeKey] ?: DEFAULT_IMAGE_CACHE_SIZE }.first()
+            }
         }
         return ImageLoader
             .Builder(this)
@@ -328,6 +333,8 @@ class App :
     }
 
     companion object {
+        private const val DEFAULT_IMAGE_CACHE_SIZE = 512
+
         suspend fun forgetAccount(context: Context) {
             Timber.d("forgetAccount: Starting logout process")
 

@@ -72,7 +72,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -81,9 +82,9 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -324,6 +325,9 @@ fun BottomSheetPlayer(
     val canSkipPrevious by playerConnection.canSkipPrevious.collectAsStateWithLifecycle()
     val canSkipNext by playerConnection.canSkipNext.collectAsStateWithLifecycle()
     val isMuted by playerConnection.isMuted.collectAsStateWithLifecycle()
+    // Single collection for the whole screen; the lyrics menus read it lazily through the lambda
+    // below so lyric loading never invalidates the player content.
+    val currentLyricsState = playerConnection.currentLyrics.collectAsStateWithLifecycle(initialValue = null)
 
     val sliderStyle by rememberEnumPreference(SliderStyleKey, SliderStyle.DEFAULT)
     val squigglySlider by rememberPreference(SquigglySliderKey, defaultValue = false)
@@ -380,17 +384,20 @@ fun BottomSheetPlayer(
     var position by positionState
     var duration by durationState
 
-    val effectivePosition by remember {
-        derivedStateOf {
-            if (isCasting) {
-                castPosition
-            } else {
-                position
+    // Kept as raw State objects so a position tick only invalidates the composables that read
+    // them (the progress row, the lyric position providers) instead of the whole player screen.
+    val effectivePositionState =
+        remember {
+            derivedStateOf {
+                if (isCasting) {
+                    castPosition
+                } else {
+                    position
+                }
             }
         }
-    }
 
-    var sliderPosition by remember {
+    val sliderPositionState = remember {
         mutableStateOf<Long?>(null)
     }
     // Track when we last manually set position to avoid Cast overwriting it
@@ -586,32 +593,6 @@ fun BottomSheetPlayer(
         .getDownload(mediaMetadata?.id ?: "")
         .collectAsStateWithLifecycle(initialValue = null)
 
-    val sleepTimerEnabled =
-        remember(
-            playerConnection.service.sleepTimer?.triggerTime,
-            playerConnection.service.sleepTimer?.pauseWhenSongEnd,
-        ) {
-            playerConnection.service.sleepTimer?.isActive ?: false
-        }
-
-    var sleepTimerTimeLeft by remember {
-        mutableLongStateOf(0L)
-    }
-
-    LaunchedEffect(sleepTimerEnabled) {
-        if (sleepTimerEnabled) {
-            while (isActive) {
-                sleepTimerTimeLeft =
-                    if (playerConnection.service.sleepTimer?.pauseWhenSongEnd == true) {
-                        playerConnection.player.duration - playerConnection.player.currentPosition
-                    } else {
-                        (playerConnection.service.sleepTimer?.triggerTime ?: 0L) - System.currentTimeMillis()
-                    }
-                delay(1000L)
-            }
-        }
-    }
-
     val scope = rememberCoroutineScope()
     var showSleepTimerDialog by remember {
         mutableStateOf(false)
@@ -747,7 +728,7 @@ fun BottomSheetPlayer(
         if (!isCasting && isPlaying) {
             while (isActive) {
                 delay(100) // Update more frequently for smoother progress bar
-                if (sliderPosition == null) { // Only update if user isn't dragging
+                if (sliderPositionState.value == null) { // Only update if user isn't dragging
                     position = playerConnection.player.currentPosition
                     // Don't clobber a valid (metadata-derived) duration with 0/UNSET mid-resolve.
                     playerConnection.player.duration.takeIf { it > 0 }?.let { duration = it }
@@ -792,7 +773,7 @@ fun BottomSheetPlayer(
     // When casting, use Cast position/duration directly
     // But wait a bit after manual seeks to let Cast catch up
     LaunchedEffect(isCasting, castPosition, castDuration) {
-        if (isCasting && sliderPosition == null) {
+        if (isCasting && sliderPositionState.value == null) {
             val timeSinceManualSeek = System.currentTimeMillis() - lastManualSeekTime
             if (timeSinceManualSeek > 1500) {
                 // Only update from Cast if we haven't manually seeked recently
@@ -1197,12 +1178,11 @@ fun BottomSheetPlayer(
 
                         AnimatedContent(targetState = showInlineLyrics, label = "LikeButton") { showLyrics ->
                             if (showLyrics) {
-                                val currentLyrics by playerConnection.currentLyrics.collectAsStateWithLifecycle(initialValue = null)
                                 FilledIconButton(
                                     onClick = {
                                         menuState.show {
                                             com.metrolist.music.ui.menu.LyricsMenu(
-                                                lyricsProvider = { currentLyrics },
+                                                lyricsProvider = { currentLyricsState.value },
                                                 songProvider = { currentSong?.song },
                                                 mediaMetadataProvider = { mediaMetadata },
                                                 onDismiss = menuState::dismiss,
@@ -1318,7 +1298,6 @@ fun BottomSheetPlayer(
 
                     AnimatedContent(targetState = showInlineLyrics, label = "LikeButton") { showLyrics ->
                         if (showLyrics) {
-                            val currentLyrics by playerConnection.currentLyrics.collectAsStateWithLifecycle(initialValue = null)
                             Box(
                                 modifier =
                                     Modifier
@@ -1328,7 +1307,7 @@ fun BottomSheetPlayer(
                                         .clickable {
                                             menuState.show {
                                                 com.metrolist.music.ui.menu.LyricsMenu(
-                                                    lyricsProvider = { currentLyrics },
+                                                    lyricsProvider = { currentLyricsState.value },
                                                     songProvider = { currentSong?.song },
                                                     mediaMetadataProvider = { mediaMetadata },
                                                     onDismiss = menuState::dismiss,
@@ -1367,148 +1346,29 @@ fun BottomSheetPlayer(
 
             Spacer(Modifier.height(24.dp))
 
-            when (sliderStyle) {
-                SliderStyle.DEFAULT -> {
-                    Slider(
-                        value = (sliderPosition ?: effectivePosition).toFloat(),
-                        valueRange = 0f..(if (duration == C.TIME_UNSET) 0f else duration.toFloat()),
-                        onValueChange = {
-                            if (!isListenTogetherGuest) {
-                                sliderPosition = it.toLong()
-                            }
-                        },
-                        onValueChangeFinished = {
-                            if (!isListenTogetherGuest) {
-                                sliderPosition?.let {
-                                    if (isCasting) {
-                                        castHandler?.seekTo(it)
-                                        lastManualSeekTime = System.currentTimeMillis()
-                                    } else {
-                                        playerConnection.player.seekTo(it)
-                                    }
-                                    position = it
-                                }
-                                sliderPosition = null
-                            }
-                        },
-                        enabled = !isListenTogetherGuest,
-                        colors = PlayerSliderColors.getSliderColors(textButtonColor, playerBackground, useDarkTheme),
-                        modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
-                    )
-                }
-
-                SliderStyle.WAVY -> {
-                    if (squigglySlider) {
-                        SquigglySlider(
-                            value = (sliderPosition ?: effectivePosition).toFloat(),
-                            valueRange = 0f..(if (duration == C.TIME_UNSET) 0f else duration.toFloat()),
-                            onValueChange = {
-                                sliderPosition = it.toLong()
-                            },
-                            onValueChangeFinished = {
-                                sliderPosition?.let {
-                                    if (isCasting) {
-                                        castHandler?.seekTo(it)
-                                        lastManualSeekTime = System.currentTimeMillis()
-                                    } else {
-                                        playerConnection.player.seekTo(it)
-                                    }
-                                    position = it
-                                }
-                                sliderPosition = null
-                            },
-                            modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
-                            colors = PlayerSliderColors.getSliderColors(textButtonColor, playerBackground, useDarkTheme),
-                            isPlaying = effectiveIsPlaying,
-                        )
+            PlayerProgressRow(
+                effectivePositionState = effectivePositionState,
+                durationState = durationState,
+                sliderPositionState = sliderPositionState,
+                isCasting = isCasting,
+                isListenTogetherGuest = isListenTogetherGuest,
+                isPlaying = effectiveIsPlaying,
+                sliderStyle = sliderStyle,
+                squigglySlider = squigglySlider,
+                textButtonColor = textButtonColor,
+                textBackgroundColor = TextBackgroundColor,
+                playerBackground = playerBackground,
+                useDarkTheme = useDarkTheme,
+                onSeek = { target ->
+                    if (isCasting) {
+                        castHandler?.seekTo(target)
+                        lastManualSeekTime = System.currentTimeMillis()
                     } else {
-                        WavySlider(
-                            value = (sliderPosition ?: effectivePosition).toFloat(),
-                            valueRange = 0f..(if (duration == C.TIME_UNSET) 0f else duration.toFloat()),
-                            onValueChange = {
-                                sliderPosition = it.toLong()
-                            },
-                            onValueChangeFinished = {
-                                sliderPosition?.let {
-                                    if (isCasting) {
-                                        castHandler?.seekTo(it)
-                                        lastManualSeekTime = System.currentTimeMillis()
-                                    } else {
-                                        playerConnection.player.seekTo(it)
-                                    }
-                                    position = it
-                                }
-                                sliderPosition = null
-                            },
-                            colors = PlayerSliderColors.getSliderColors(textButtonColor, playerBackground, useDarkTheme),
-                            modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
-                            isPlaying = effectiveIsPlaying,
-                        )
+                        playerConnection.player.seekTo(target)
                     }
-                }
-
-                SliderStyle.SLIM -> {
-                    Slider(
-                        value = (sliderPosition ?: effectivePosition).toFloat(),
-                        valueRange = 0f..(if (duration == C.TIME_UNSET) 0f else duration.toFloat()),
-                        onValueChange = {
-                            if (!isListenTogetherGuest) {
-                                sliderPosition = it.toLong()
-                            }
-                        },
-                        onValueChangeFinished = {
-                            if (!isListenTogetherGuest) {
-                                sliderPosition?.let {
-                                    if (isCasting) {
-                                        castHandler?.seekTo(it)
-                                        lastManualSeekTime = System.currentTimeMillis()
-                                    } else {
-                                        playerConnection.player.seekTo(it)
-                                    }
-                                    position = it
-                                }
-                                sliderPosition = null
-                            }
-                        },
-                        enabled = !isListenTogetherGuest,
-                        thumb = { Spacer(modifier = Modifier.size(0.dp)) },
-                        track = { sliderState ->
-                            PlayerSliderTrack(
-                                sliderState = sliderState,
-                                colors = PlayerSliderColors.getSliderColors(textButtonColor, playerBackground, useDarkTheme),
-                            )
-                        },
-                        modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = PlayerHorizontalPadding + 4.dp),
-            ) {
-                Text(
-                    text = makeTimeString(sliderPosition ?: effectivePosition),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = TextBackgroundColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-
-                Text(
-                    text = if (duration != C.TIME_UNSET) makeTimeString(duration) else "",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = TextBackgroundColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+                    position = target
+                },
+            )
 
             Spacer(Modifier.height(24.dp))
 
@@ -1862,9 +1722,10 @@ fun BottomSheetPlayer(
                                 .weight(1f)
                                 .nestedScroll(state.preUpPostDownNestedScrollConnection),
                     ) {
-                        // Remember lambdas to prevent unnecessary recomposition
-                        val currentSliderPosition by rememberUpdatedState(sliderPosition)
-                        val sliderPositionProvider = remember { { currentSliderPosition } }
+                        // Remember lambdas to prevent unnecessary recomposition. The providers read the
+                        // raw state objects when invoked, so a progress tick or a slider drag never
+                        // recomposes the player screen.
+                        val sliderPositionProvider = remember { { sliderPositionState.value } }
                         val isExpandedProvider = remember(state) { { state.isExpanded } }
                         AnimatedContent(
                             targetState = showInlineLyrics,
@@ -1875,7 +1736,7 @@ fun BottomSheetPlayer(
                                 InlineLyricsView(
                                     mediaMetadata = mediaMetadata,
                                     showLyrics = showLyrics,
-                                    positionProvider = { effectivePosition },
+                                    positionProvider = { effectivePositionState.value },
                                 )
                             } else {
                                 Thumbnail(
@@ -1925,9 +1786,10 @@ fun BottomSheetPlayer(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier.weight(1f),
                     ) {
-                        // Remember lambdas to prevent unnecessary recomposition
-                        val currentSliderPosition by rememberUpdatedState(sliderPosition)
-                        val sliderPositionProvider = remember { { currentSliderPosition } }
+                        // Remember lambdas to prevent unnecessary recomposition. The providers read the
+                        // raw state objects when invoked, so a progress tick or a slider drag never
+                        // recomposes the player screen.
+                        val sliderPositionProvider = remember { { sliderPositionState.value } }
                         val isExpandedProvider = remember(state) { { state.isExpanded } }
                         AnimatedContent(
                             targetState = showInlineLyrics,
@@ -1938,7 +1800,7 @@ fun BottomSheetPlayer(
                                 InlineLyricsView(
                                     mediaMetadata = mediaMetadata,
                                     showLyrics = showLyrics,
-                                    positionProvider = { effectivePosition },
+                                    positionProvider = { effectivePositionState.value },
                                 )
                             } else {
                                 Thumbnail(
@@ -1986,6 +1848,141 @@ fun BottomSheetPlayer(
                 },
             )
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlayerProgressRow(
+    effectivePositionState: State<Long>,
+    durationState: State<Long>,
+    sliderPositionState: MutableState<Long?>,
+    isCasting: Boolean,
+    isListenTogetherGuest: Boolean,
+    isPlaying: Boolean,
+    sliderStyle: SliderStyle,
+    squigglySlider: Boolean,
+    textButtonColor: Color,
+    textBackgroundColor: Color,
+    playerBackground: PlayerBackgroundStyle,
+    useDarkTheme: Boolean,
+    onSeek: (Long) -> Unit,
+) {
+    // The position/duration states are read here, in this leaf, so the ~10 Hz progress tick only
+    // invalidates this row instead of the whole player screen.
+    val duration = durationState.value
+    val displayedPosition = sliderPositionState.value ?: effectivePositionState.value
+
+    val finishSeek: (Long) -> Unit = { target ->
+        onSeek(target)
+        sliderPositionState.value = null
+    }
+
+    when (sliderStyle) {
+        SliderStyle.DEFAULT -> {
+            Slider(
+                value = displayedPosition.toFloat(),
+                valueRange = 0f..(if (duration == C.TIME_UNSET) 0f else duration.toFloat()),
+                onValueChange = {
+                    if (!isListenTogetherGuest) {
+                        sliderPositionState.value = it.toLong()
+                    }
+                },
+                onValueChangeFinished = {
+                    if (!isListenTogetherGuest) {
+                        sliderPositionState.value?.let(finishSeek)
+                    }
+                },
+                enabled = !isListenTogetherGuest,
+                colors = PlayerSliderColors.getSliderColors(textButtonColor, playerBackground, useDarkTheme),
+                modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
+            )
+        }
+
+        SliderStyle.WAVY -> {
+            if (squigglySlider) {
+                SquigglySlider(
+                    value = displayedPosition.toFloat(),
+                    valueRange = 0f..(if (duration == C.TIME_UNSET) 0f else duration.toFloat()),
+                    onValueChange = {
+                        sliderPositionState.value = it.toLong()
+                    },
+                    onValueChangeFinished = {
+                        sliderPositionState.value?.let(finishSeek)
+                    },
+                    modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
+                    colors = PlayerSliderColors.getSliderColors(textButtonColor, playerBackground, useDarkTheme),
+                    isPlaying = isPlaying,
+                )
+            } else {
+                WavySlider(
+                    value = displayedPosition.toFloat(),
+                    valueRange = 0f..(if (duration == C.TIME_UNSET) 0f else duration.toFloat()),
+                    onValueChange = {
+                        sliderPositionState.value = it.toLong()
+                    },
+                    onValueChangeFinished = {
+                        sliderPositionState.value?.let(finishSeek)
+                    },
+                    colors = PlayerSliderColors.getSliderColors(textButtonColor, playerBackground, useDarkTheme),
+                    modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
+                    isPlaying = isPlaying,
+                )
+            }
+        }
+
+        SliderStyle.SLIM -> {
+            Slider(
+                value = displayedPosition.toFloat(),
+                valueRange = 0f..(if (duration == C.TIME_UNSET) 0f else duration.toFloat()),
+                onValueChange = {
+                    if (!isListenTogetherGuest) {
+                        sliderPositionState.value = it.toLong()
+                    }
+                },
+                onValueChangeFinished = {
+                    if (!isListenTogetherGuest) {
+                        sliderPositionState.value?.let(finishSeek)
+                    }
+                },
+                enabled = !isListenTogetherGuest,
+                thumb = { Spacer(modifier = Modifier.size(0.dp)) },
+                track = { sliderState ->
+                    PlayerSliderTrack(
+                        sliderState = sliderState,
+                        colors = PlayerSliderColors.getSliderColors(textButtonColor, playerBackground, useDarkTheme),
+                    )
+                },
+                modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
+            )
+        }
+    }
+
+    Spacer(Modifier.height(4.dp))
+
+    Row(
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = PlayerHorizontalPadding + 4.dp),
+    ) {
+        Text(
+            text = makeTimeString(displayedPosition),
+            style = MaterialTheme.typography.labelMedium,
+            color = textBackgroundColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+
+        Text(
+            text = if (duration != C.TIME_UNSET) makeTimeString(duration) else "",
+            style = MaterialTheme.typography.labelMedium,
+            color = textBackgroundColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

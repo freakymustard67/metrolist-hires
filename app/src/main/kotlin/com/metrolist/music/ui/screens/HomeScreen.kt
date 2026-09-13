@@ -543,10 +543,7 @@ fun HomeScreen(
                                                                 }
                                                             } else if (itemIndex < pageItems.size) {
                                                                 val item = pageItems[itemIndex]
-                                                                val isPinned by database.speedDialDao
-                                                                    .isPinned(
-                                                                        item.id,
-                                                                    ).collectAsStateWithLifecycle(initialValue = false)
+                                                                val isPinned = pinnedSpeedDialItems.any { it.id == item.id }
 
                                                                 Box(
                                                                     modifier =
@@ -840,15 +837,10 @@ fun HomeScreen(
                                                 items = quickPicks.distinctBy { it.id },
                                                 key = { "home_quickpick_${it.id}" },
                                             ) { originalSong ->
-                                            // fetch song from database to keep updated
-                                            val song by database
-                                                .song(originalSong.id)
-                                                .collectAsStateWithLifecycle(initialValue = originalSong)
-
                                             SongListItem(
-                                                song = song!!,
+                                                song = originalSong,
                                                 showInLibraryIcon = true,
-                                                isActive = song!!.id == mediaMetadata?.id,
+                                                isActive = originalSong.id == mediaMetadata?.id,
                                                 isPlaying = isPlaying,
                                                 isSwipeable = false,
                                                 trailingContent = {
@@ -856,7 +848,7 @@ fun HomeScreen(
                                                         onClick = {
                                                             menuState.show {
                                                                 SongMenu(
-                                                                    originalSong = song!!,
+                                                                    originalSong = originalSong,
                                                                     onDismiss = menuState::dismiss,
                                                                 )
                                                             }
@@ -874,18 +866,18 @@ fun HomeScreen(
                                                         .combinedClickable(
                                                             onClick = {
                                                                 if (!isListenTogetherGuest) {
-                                                                    if (song!!.id == mediaMetadata?.id) {
+                                                                    if (originalSong.id == mediaMetadata?.id) {
                                                                         playerConnection.togglePlayPause()
                                                                     } else {
                                                                         playerConnection.playQueue(
                                                                             if (autoRadioQueue) {
                                                                                 YouTubeQueue.radio(
-                                                                                    song!!.toMediaMetadata(),
+                                                                                    originalSong.toMediaMetadata(),
                                                                                 )
                                                                             } else {
                                                                                 ListQueue(
-                                                                                    title = song!!.title,
-                                                                                    items = listOf(song!!.toMediaItem())
+                                                                                    title = originalSong.title,
+                                                                                    items = listOf(originalSong.toMediaItem())
                                                                                 )
                                                                             }
                                                                         )
@@ -896,7 +888,7 @@ fun HomeScreen(
                                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                                 menuState.show {
                                                                     SongMenu(
-                                                                        originalSong = song!!,
+                                                                        originalSong = originalSong,
                                                                         onDismiss = menuState::dismiss,
                                                                     )
                                                                 }
@@ -947,14 +939,10 @@ fun HomeScreen(
                                             items = recent.distinctBy { it.id },
                                             key = { "home_recent_${it.id}" },
                                         ) { originalSong ->
-                                            val song by database
-                                                .song(originalSong.id)
-                                                .collectAsStateWithLifecycle(initialValue = originalSong)
-
                                             SongListItem(
-                                                song = song!!,
+                                                song = originalSong,
                                                 showInLibraryIcon = true,
-                                                isActive = song!!.id == mediaMetadata?.id,
+                                                isActive = originalSong.id == mediaMetadata?.id,
                                                 isPlaying = isPlaying,
                                                 isSwipeable = false,
                                                 trailingContent = {
@@ -962,7 +950,7 @@ fun HomeScreen(
                                                         onClick = {
                                                             menuState.show {
                                                                 SongMenu(
-                                                                    originalSong = song!!,
+                                                                    originalSong = originalSong,
                                                                     onDismiss = menuState::dismiss,
                                                                 )
                                                             }
@@ -980,18 +968,18 @@ fun HomeScreen(
                                                         .combinedClickable(
                                                             onClick = {
                                                                 if (!isListenTogetherGuest) {
-                                                                    if (song!!.id == mediaMetadata?.id) {
+                                                                    if (originalSong.id == mediaMetadata?.id) {
                                                                         playerConnection.togglePlayPause()
                                                                     } else {
                                                                         playerConnection.playQueue(
                                                                             if (autoRadioQueue) {
                                                                                 YouTubeQueue.radio(
-                                                                                    song!!.toMediaMetadata(),
+                                                                                    originalSong.toMediaMetadata(),
                                                                                 )
                                                                             } else {
                                                                                 ListQueue(
-                                                                                    title = song!!.title,
-                                                                                    items = listOf(song!!.toMediaItem())
+                                                                                    title = originalSong.title,
+                                                                                    items = listOf(originalSong.toMediaItem())
                                                                                 )
                                                                             }
                                                                         )
@@ -1002,7 +990,7 @@ fun HomeScreen(
                                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                                 menuState.show {
                                                                     SongMenu(
-                                                                        originalSong = song!!,
+                                                                        originalSong = originalSong,
                                                                         onDismiss = menuState::dismiss,
                                                                     )
                                                                 }

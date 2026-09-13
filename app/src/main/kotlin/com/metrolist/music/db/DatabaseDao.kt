@@ -1524,6 +1524,21 @@ interface DatabaseDao {
     @Query("SELECT COUNT(*) FROM event")
     fun eventCount(): Flow<Int>
 
+    @Query("SELECT EXISTS(SELECT 1 FROM event)")
+    fun hasEvents(): Flow<Boolean>
+
+    @Query("SELECT songId FROM song_album_map WHERE albumId = :albumId")
+    suspend fun songIdsInAlbum(albumId: String): List<String>
+
+    @Query("SELECT songId FROM playlist_song_map WHERE playlistId = :playlistId")
+    suspend fun songIdsInPlaylist(playlistId: String): List<String>
+
+    @Query("SELECT liked FROM song WHERE id = :songId")
+    suspend fun songLiked(songId: String): Boolean?
+
+    @Query("SELECT bookmarkedAt FROM album WHERE id = :albumId")
+    suspend fun albumBookmarkedAt(albumId: String): LocalDateTime?
+
     @Transaction
     @Query("DELETE FROM event")
     fun clearListenHistory()

@@ -77,6 +77,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -172,8 +173,10 @@ import com.metrolist.music.db.MusicDatabase
 import com.metrolist.music.db.entities.SearchHistory
 import com.metrolist.music.extensions.toEnum
 import com.metrolist.music.lyrics.LyricsProviderRegistry
+import androidx.media3.exoplayer.offline.Download
 import com.metrolist.music.models.toMediaMetadata
 import com.metrolist.music.playback.DownloadUtil
+import com.metrolist.music.constants.SwipeToSongKey
 import com.metrolist.music.playback.MusicService
 import com.metrolist.music.playback.MusicService.MusicBinder
 import com.metrolist.music.playback.PlayerConnection
@@ -197,6 +200,7 @@ import com.metrolist.music.ui.screens.settings.NavigationTab
 import com.metrolist.music.ui.theme.ColorSaver
 import com.metrolist.music.ui.theme.DefaultThemeColor
 import com.metrolist.music.ui.theme.MetrolistTheme
+import com.metrolist.music.ui.theme.Motion
 import com.metrolist.music.ui.theme.extractThemeColor
 import com.metrolist.music.ui.utils.appBarScrollBehavior
 import com.metrolist.music.ui.utils.resetHeightOffset
@@ -1026,11 +1030,14 @@ class MainActivity : FragmentActivity() {
                 var showAccountDialog by remember { mutableStateOf(false) }
 
                 val pauseListenHistory by rememberPreference(PauseListenHistoryKey, defaultValue = false)
-                val eventCount by database.eventCount().collectAsStateWithLifecycle(initialValue = 0)
+                val hasEvents by database.hasEvents().collectAsStateWithLifecycle(initialValue = false)
                 val showHistoryButton =
-                    remember(pauseListenHistory, eventCount) {
-                        !(pauseListenHistory && eventCount == 0)
+                    remember(pauseListenHistory, hasEvents) {
+                        !(pauseListenHistory && !hasEvents)
                     }
+
+                val swipeToSongEnabled by rememberPreference(SwipeToSongKey, defaultValue = false)
+                val downloads = downloadUtil.downloads.collectAsStateWithLifecycle()
 
                 val baseBg = if (pureBlack) Color.Black else MaterialTheme.colorScheme.surfaceContainer
                 val artistNameAliases by ArtistNameAliases.aliases.collectAsStateWithLifecycle()
@@ -1042,6 +1049,8 @@ class MainActivity : FragmentActivity() {
                     LocalPlayerConnection provides playerConnection,
                     LocalPlayerAwareWindowInsets provides playerAwareWindowInsets,
                     LocalDownloadUtil provides downloadUtil,
+                    LocalDownloads provides downloads,
+                    LocalSwipeToSongEnabled provides swipeToSongEnabled,
                     LocalShimmerTheme provides ShimmerTheme,
                     LocalSyncUtils provides syncUtils,
                     LocalListenTogetherManager provides listenTogetherManager,
@@ -1354,40 +1363,50 @@ class MainActivity : FragmentActivity() {
                                         val currentRouteIndex = routeIndexMap[targetState.destination.route] ?: -1
                                         val previousRouteIndex = routeIndexMap[initialState.destination.route] ?: -1
 
-                                        if (currentRouteIndex == -1 || currentRouteIndex > previousRouteIndex) {
-                                            slideInHorizontally { it / 8 } + fadeIn(tween(200))
+                                        if (currentRouteIndex >= 0 && previousRouteIndex >= 0) {
+                                            // Tab switch: fading alone avoids composing two full
+                                            // screens under a slide while both are mounting lists.
+                                            fadeIn(tween(Motion.FAST))
+                                        } else if (currentRouteIndex == -1 || currentRouteIndex > previousRouteIndex) {
+                                            slideInHorizontally { it / 8 } + fadeIn(tween(Motion.STANDARD))
                                         } else {
-                                            slideInHorizontally { -it / 8 } + fadeIn(tween(200))
+                                            slideInHorizontally { -it / 8 } + fadeIn(tween(Motion.STANDARD))
                                         }
                                     },
                                     exitTransition = {
                                         val currentRouteIndex = routeIndexMap[initialState.destination.route] ?: -1
                                         val targetRouteIndex = routeIndexMap[targetState.destination.route] ?: -1
 
-                                        if (targetRouteIndex == -1 || targetRouteIndex > currentRouteIndex) {
-                                            slideOutHorizontally { -it / 8 } + fadeOut(tween(200))
+                                        if (currentRouteIndex >= 0 && targetRouteIndex >= 0) {
+                                            fadeOut(tween(Motion.FAST))
+                                        } else if (targetRouteIndex == -1 || targetRouteIndex > currentRouteIndex) {
+                                            slideOutHorizontally { -it / 8 } + fadeOut(tween(Motion.STANDARD))
                                         } else {
-                                            slideOutHorizontally { it / 8 } + fadeOut(tween(200))
+                                            slideOutHorizontally { it / 8 } + fadeOut(tween(Motion.STANDARD))
                                         }
                                     },
                                     popEnterTransition = {
                                         val currentRouteIndex = routeIndexMap[targetState.destination.route] ?: -1
                                         val previousRouteIndex = routeIndexMap[initialState.destination.route] ?: -1
 
-                                        if (previousRouteIndex != -1 && previousRouteIndex < currentRouteIndex) {
-                                            slideInHorizontally { it / 8 } + fadeIn(tween(200))
+                                        if (currentRouteIndex >= 0 && previousRouteIndex >= 0) {
+                                            fadeIn(tween(Motion.FAST))
+                                        } else if (previousRouteIndex != -1 && previousRouteIndex < currentRouteIndex) {
+                                            slideInHorizontally { it / 8 } + fadeIn(tween(Motion.STANDARD))
                                         } else {
-                                            slideInHorizontally { -it / 8 } + fadeIn(tween(200))
+                                            slideInHorizontally { -it / 8 } + fadeIn(tween(Motion.STANDARD))
                                         }
                                     },
                                     popExitTransition = {
                                         val currentRouteIndex = routeIndexMap[initialState.destination.route] ?: -1
                                         val targetRouteIndex = routeIndexMap[targetState.destination.route] ?: -1
 
-                                        if (currentRouteIndex != -1 && currentRouteIndex < targetRouteIndex) {
-                                            slideOutHorizontally { -it / 8 } + fadeOut(tween(200))
+                                        if (currentRouteIndex >= 0 && targetRouteIndex >= 0) {
+                                            fadeOut(tween(Motion.FAST))
+                                        } else if (currentRouteIndex != -1 && currentRouteIndex < targetRouteIndex) {
+                                            slideOutHorizontally { -it / 8 } + fadeOut(tween(Motion.STANDARD))
                                         } else {
-                                            slideOutHorizontally { it / 8 } + fadeOut(tween(200))
+                                            slideOutHorizontally { it / 8 } + fadeOut(tween(Motion.STANDARD))
                                         }
                                     },
                                     modifier = Modifier.nestedScroll(topAppBarScrollBehavior.nestedScrollConnection),
@@ -1722,6 +1741,17 @@ val LocalNavController = staticCompositionLocalOf<NavController> { error("No Nav
 val LocalPlayerConnection = staticCompositionLocalOf<PlayerConnection?> { error("No PlayerConnection provided") }
 val LocalPlayerAwareWindowInsets = compositionLocalOf<WindowInsets> { error("No WindowInsets provided") }
 val LocalDownloadUtil = staticCompositionLocalOf<DownloadUtil> { error("No DownloadUtil provided") }
+
+/**
+ * The download map, provided once as a [State] so that reading it never recomposes the
+ * provider scope; rows derive their own entry from it.
+ */
+val LocalDownloads = staticCompositionLocalOf<State<Map<String, Download>>> {
+    error("No downloads provided")
+}
+
+/** Swipe-to-queue preference, read once instead of per list row. */
+val LocalSwipeToSongEnabled = staticCompositionLocalOf { false }
 val LocalSyncUtils = staticCompositionLocalOf<SyncUtils> { error("No SyncUtils provided") }
 val LocalListenTogetherManager = staticCompositionLocalOf<com.metrolist.music.listentogether.ListenTogetherManager?> { null }
 val LocalChangelogState = staticCompositionLocalOf<MutableState<Boolean>> { error("No LocalChangelogState provided") }

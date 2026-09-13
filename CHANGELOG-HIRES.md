@@ -70,7 +70,8 @@ when a cookie is set).
 "Recommended for you" is back on the home screen, but bounded and cached instead of the
 old per-load fan-out.
 
-- Seeds = your 3 most recent plays, topped up with liked songs (`recentSongs` + `likedSongsByCreateDateDesc`).
+- Seeds = your 2 most recent plays + 1 liked song, topped up when either side is short
+  (`recentSongs` + `likedSongsByCreateDateDesc`; a song that is both is used once).
 - Per refill: one `next` + one `related` per seed (max 6 requests), filtered by the
   explicit/video/shorts preferences. Each card shows "Because you listened to <seed>".
 - Cached in DataStore (`RecommendationsCacheKey`) with a 12 h TTL: the row paints from
@@ -79,6 +80,33 @@ old per-load fan-out.
 - Dedup/interleave logic is pure and tested: `buildRecommendations(perSeed = 6, limit = 18)`
   credits a song to the first seed that suggested it and never recommends a seed itself.
 - Tests: `RecommendationsTest` (5 cases); full app suite 208/208.
+
+## Performance pass + design tokens (app)
+
+First pass over an audited list of jank sources. No behaviour changes.
+
+- Shared list kit (`ui/component/Items.kt`): album and playlist rows used to load every child
+  song (4 `@Relation` expansions each) just to compute one download badge — now one id-only
+  query (`songIdsInAlbum` / `songIdsInPlaylist`) plus a derived state; YouTube rows fetched a
+  full `Song`/`Album` for a single boolean — now `songLiked` / `albumBookmarkedAt`.
+- The download map is collected once in `MainActivity` and provided as a `State`
+  (`LocalDownloads`); a row derives only its own entry, so a progress tick for one song no
+  longer recomposes every visible row. Swipe-to-queue is provided once
+  (`LocalSwipeToSongEnabled`) instead of one DataStore collector per row.
+- Home rows (speed-dial pinned state, quick picks, recent songs) no longer open a Room flow
+  per cell — they use the lists the ViewModel already collected.
+- Shell: `eventCount()` (a full `COUNT(*)` over the listen history, invalidated on every
+  play) replaced with `EXISTS` (`hasEvents`). Coil loader creation no longer blocks on a
+  DataStore read, and list/grid artwork skips the crossfade while scrolling.
+- Player: the 100 ms position tick no longer invalidates the whole player screen.
+- Lyrics: per-line romanized/translated collectors hoisted to one collection per screen, the
+  per-frame interpolation moved into the draw phase, the glow pulse runs only for the active
+  line while playing, and a dead per-frame state write is gone.
+- Navigation: tab switches cross-fade (150 ms) instead of sliding two full screens; push and
+  pop keep the slide. Durations centralized in `ui/theme/Motion.kt`.
+- Tokens: `AppShapes` wired into `MaterialTheme` (previously unset) and the shared thumbnail
+  radius raised 3 dp → 8 dp so list artwork matches the rest of the app.
+- Playlist screens no longer clear and refill a snapshot list on every DB emission.
 
 ## Server changes (slskd-hires repo)
 

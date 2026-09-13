@@ -27,7 +27,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
@@ -136,6 +135,8 @@ internal fun LyricsLine(
     romanizeAsMain: Boolean,
     enabledLanguages: List<String>,
     romanizeLyrics: Boolean,
+    romanizedText: String?,
+    translatedText: String?,
     onSizeChanged: (Int) -> Unit,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -212,10 +213,9 @@ internal fun LyricsLine(
                 val animatedAlpha by animateFloatAsState(targetAlpha, tween(250), label = "lyricsLineAlpha")
                 val lineColor = expressiveAccent.copy(alpha = if (item.isBackground) focusedAlpha else animatedAlpha)
                 
-                val romanizedTextState by item.romanizedTextFlow.collectAsStateWithLifecycle()
-                val isRomanizedAvailable = romanizedTextState != null
-                val mainTextRaw = if (romanizeAsMain && isRomanizedAvailable) romanizedTextState else item.text
-                val subTextRaw = if (romanizeAsMain && isRomanizedAvailable) item.text else romanizedTextState
+                val isRomanizedAvailable = romanizedText != null
+                val mainTextRaw = if (romanizeAsMain && isRomanizedAvailable) romanizedText else item.text
+                val subTextRaw = if (romanizeAsMain && isRomanizedAvailable) item.text else romanizedText
                 val mainText = if (item.isBackground) mainTextRaw?.removePrefix("(")?.removeSuffix(")") else mainTextRaw
                 val subText = if (item.isBackground) subTextRaw?.removePrefix("(")?.removeSuffix(")") else subTextRaw
 
@@ -289,8 +289,7 @@ internal fun LyricsLine(
                     }
                 }
                 
-                val transText by item.translatedTextFlow.collectAsStateWithLifecycle()
-                transText?.let { 
+                translatedText?.let {
                     Text(
                         text = it,
                         fontSize = 16.sp,
@@ -340,30 +339,19 @@ private fun WordLevelLyrics(
         }
     }
     
-    var smoothPosition by remember { mutableLongStateOf(currentPositionState + lyricsOffset) }
-    
+    // Frame tick updated once per frame while this line is the active one. It is
+    // only ever read inside the Canvas draw lambda below, so ticking invalidates
+    // the draw phase without triggering recomposition.
+    val frameTick = remember { mutableLongStateOf(currentPositionState + lyricsOffset) }
+    // Interpolation anchors mutated only from the draw lambda (never snapshot state):
+    // [0] last observed player position, [1] wall-clock time it last changed.
+    val interpolationAnchors = remember { longArrayOf(Long.MIN_VALUE, 0L) }
+
     LaunchedEffect(isActiveLine) {
         if (isActiveLine) {
-            var lastPlayerPos = playerConnection.player.currentPosition
-            var lastUpdateTime = System.currentTimeMillis()
             while (isActive) {
-                withFrameMillis {
-                    val now = System.currentTimeMillis()
-                    val playerPos = playerConnection.player.currentPosition
-                    if (playerPos != lastPlayerPos) {
-                        lastPlayerPos = playerPos
-                        lastUpdateTime = now
-                    }
-                    val elapsed = now - lastUpdateTime
-                    smoothPosition = lastPlayerPos + lyricsOffset + (if (playerConnection.player.isPlaying) elapsed else 0)
-                }
+                withFrameMillis { frameTick.longValue = System.currentTimeMillis() }
             }
-        }
-    }
-    
-    LaunchedEffect(isActiveLine, currentPositionState) {
-        if (!isActiveLine) {
-            smoothPosition = currentPositionState + lyricsOffset
         }
     }
 
@@ -519,6 +507,21 @@ private fun WordLevelLyrics(
             )
         ) {
             if (mainText.isEmpty()) return@Canvas
+            // Interpolated playback position is resolved in the draw phase so the
+            // per-frame update never crosses into composition.
+            val smoothPosition =
+                if (isActiveLine) {
+                    val now = frameTick.longValue
+                    val playerPos = playerConnection.player.currentPosition
+                    if (playerPos != interpolationAnchors[0]) {
+                        interpolationAnchors[0] = playerPos
+                        interpolationAnchors[1] = now
+                    }
+                    val elapsed = now - interpolationAnchors[1]
+                    playerPos + lyricsOffset + (if (playerConnection.player.isPlaying) elapsed else 0)
+                } else {
+                    currentPositionState + lyricsOffset
+                }
             if (!isActiveLine) {
                 drawText(layoutResult, color = lineColor)
             } else {

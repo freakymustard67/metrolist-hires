@@ -518,7 +518,7 @@ private fun OnlinePlaylistHeader(
             shape = RoundedCornerShape(3.dp),
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current).data(playlist.thumbnail?.resize(1080, 1080)).build(),
+                model = ImageRequest.Builder(LocalContext.current).data(playlist.thumbnail?.resize(720, 720)).build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

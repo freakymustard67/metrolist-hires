@@ -65,6 +65,7 @@ import com.metrolist.music.ui.screens.settings.integrations.SlskdSettings
 import com.metrolist.music.ui.screens.wrapped.WrappedScreen
 import com.metrolist.music.utils.rememberEnumPreference
 import com.metrolist.music.utils.rememberPreference
+import com.metrolist.music.ui.theme.Motion
 
 @OptIn(ExperimentalMaterial3Api::class)
 fun NavGraphBuilder.navigationBuilder(
@@ -158,24 +159,24 @@ fun NavGraphBuilder.navigationBuilder(
                 },
             ),
         enterTransition = {
-            fadeIn(tween(250))
+            fadeIn(tween(Motion.STANDARD))
         },
         exitTransition = {
             if (targetState.destination.route?.startsWith("search/") == true) {
-                fadeOut(tween(200))
+                fadeOut(tween(Motion.FAST))
             } else {
-                fadeOut(tween(200)) + slideOutHorizontally { -it / 2 }
+                fadeOut(tween(Motion.FAST)) + slideOutHorizontally { -it / 2 }
             }
         },
         popEnterTransition = {
             if (initialState.destination.route?.startsWith("search/") == true) {
-                fadeIn(tween(250))
+                fadeIn(tween(Motion.STANDARD))
             } else {
-                fadeIn(tween(250)) + slideInHorizontally { -it / 2 }
+                fadeIn(tween(Motion.STANDARD)) + slideInHorizontally { -it / 2 }
             }
         },
         popExitTransition = {
-            fadeOut(tween(200))
+            fadeOut(tween(Motion.FAST))
         },
     ) { backStackEntry ->
         OnlineSearchResult(

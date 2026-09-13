@@ -211,7 +211,7 @@ fun AlbumScreen(
                         shape = RoundedCornerShape(3.dp),
                     ) {
                         AsyncImage(
-                            model = albumWithSongs.album.thumbnailUrl?.resize(1080, 1080),
+                            model = albumWithSongs.album.thumbnailUrl?.resize(720, 720),
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize(),

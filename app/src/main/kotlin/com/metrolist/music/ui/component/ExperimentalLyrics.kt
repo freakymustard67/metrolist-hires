@@ -109,6 +109,7 @@ import com.metrolist.music.constants.ShowIntervalIndicatorKey
 import com.metrolist.music.constants.TranslateLanguageKey
 import com.metrolist.music.constants.TranslateModeKey
 import com.metrolist.music.db.entities.LyricsEntity.Companion.LYRICS_NOT_FOUND
+import com.metrolist.music.lyrics.LyricsEntry
 import com.metrolist.music.lyrics.LyricsTranslationHelper
 import com.metrolist.music.lyrics.LyricsUtils.findActiveLineIndices
 import com.metrolist.music.lyrics.lyricsTextLooksSynced
@@ -222,6 +223,19 @@ fun ExperimentalLyrics(
     val lines by lyricsViewModel.lines.collectAsStateWithLifecycle()
     val mergedLyricsList by lyricsViewModel.mergedLyricsList.collectAsStateWithLifecycle()
 
+    // Per-line romanization/translation flows are collected once for the whole
+    // screen instead of once per rendered row. Each row reads only its own
+    // entry's value through a derived state, so it recomposes only when its text
+    // actually changes.
+    val romanizedTexts = remember(lines) { mutableStateMapOf<LyricsEntry, String?>() }
+    val translatedTexts = remember(lines) { mutableStateMapOf<LyricsEntry, String?>() }
+    LaunchedEffect(lines) {
+        lines.forEach { entry ->
+            launch { entry.romanizedTextFlow.collect { romanizedTexts[entry] = it } }
+            launch { entry.translatedTextFlow.collect { translatedTexts[entry] = it } }
+        }
+    }
+
     LaunchedEffect(lyrics, enabledLanguages, romanizeCyrillicByLine, showIntervalIndicator) {
         lyricsViewModel.processLyrics(lyrics, enabledLanguages, romanizeCyrillicByLine, showIntervalIndicator)
     }
@@ -332,7 +346,6 @@ fun ExperimentalLyrics(
     }
 
     var lastMainMaxSeen by remember(lyrics, lines) { mutableIntStateOf(-1) }
-    var smoothPositionForSync by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(lyrics, lines) {
         if (lyrics.isNullOrEmpty() || lines.isEmpty()) {
@@ -362,7 +375,6 @@ fun ExperimentalLyrics(
             }
             
             currentPositionState = position
-            smoothPositionForSync = position
             
             val lyricsOffset = currentSong?.song?.lyricsOffset ?: 0
             val effectivePosition = position + lyricsOffset
@@ -754,6 +766,8 @@ fun ExperimentalLyrics(
                                 is LyricsListItem.Line -> {
                                     val index = listItem.index
                                     val item = listItem.entry
+                                    val romanizedText by remember(item) { derivedStateOf { romanizedTexts[item] } }
+                                    val translatedText by remember(item) { derivedStateOf { translatedTexts[item] } }
                                     val isActiveLine = activeLineIndices.contains(index)
                                     val pairedMainLineIndex = if (item.isBackground) (index - 1 downTo 0).firstOrNull { lines.getOrNull(it)?.isBackground == false } ?: -1 else -1
                                     
@@ -775,6 +789,7 @@ fun ExperimentalLyrics(
                                         respectAgentPositioning = respectAgentPositioning, isAutoScrollEnabled = isAutoScrollEnabled,
                                         displayedCurrentLineIndex = deferredCurrentLineIndex, romanizeAsMain = romanizeAsMain,
                                         enabledLanguages = enabledLanguages, romanizeLyrics = currentSong?.romanizeLyrics == true,
+                                        romanizedText = romanizedText, translatedText = translatedText,
                                         onSizeChanged = { itemHeights[listIndex] = it },
                                         onClick = {
                                             if (isSelectionModeActive) {

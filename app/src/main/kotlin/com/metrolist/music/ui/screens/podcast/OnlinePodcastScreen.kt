@@ -317,7 +317,7 @@ private fun PodcastHeader(
     ) {
         AsyncImage(
             model = ImageRequest.Builder(context)
-                .data(podcast.thumbnail?.resize(1080, 1080))
+                .data(podcast.thumbnail?.resize(600, 600))
                 .build(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
