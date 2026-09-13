@@ -83,9 +83,14 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder
 import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.flac.FlacExtractor
 import androidx.media3.extractor.mkv.MatroskaExtractor
+import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.extractor.mp4.FragmentedMp4Extractor
 import androidx.media3.extractor.mp4.Mp4Extractor
+import androidx.media3.extractor.ogg.OggExtractor
+import androidx.media3.extractor.ts.AdtsExtractor
+import androidx.media3.extractor.wav.WavExtractor
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaController
@@ -419,7 +424,6 @@ class MusicService :
 
     private val _playerFlow = MutableStateFlow<ExoPlayer?>(null)
     val playerFlow = _playerFlow.asStateFlow()
-
     private val playerSilenceProcessors = HashMap<Player, SilenceDetectorAudioProcessor>()
 
     private val instantSilenceSkipEnabled = MutableStateFlow(false)
@@ -2195,6 +2199,7 @@ class MusicService :
         transferId: String?,
     ) {
         val current = SlskdOverrideStore.get(mediaId)
+        evictSlskdSpans(mediaId)
         SlskdOverrideStore.put(SlskdOverride(mediaId, fileUrl, transferId))
         slskdRetried.remove(mediaId)
         if (current?.fileUrl == fileUrl) {
@@ -2205,7 +2210,9 @@ class MusicService :
         retrySlskdMedia(mediaId)
         toastOnMain(R.string.slskd_now_playing)
     }
+
     fun clearSlskdOverride(mediaId: String) {
+        evictSlskdSpans(mediaId)
         SlskdOverrideStore.remove(mediaId)
         slskdRetried.remove(mediaId)
         Timber.tag(TAG).i("slskd override cleared for $mediaId, reverting to YouTube")
@@ -2234,6 +2241,12 @@ class MusicService :
                 val wasPlaying = player.isPlaying
                 player.stop()
                 performAggressiveCacheClear(mediaId)
+                // the slskd stream must win over any offline copy as well
+                try {
+                    downloadCache.removeResource(mediaId)
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Failed to clear download cache for slskd switch")
+                }
                 delay(RETRY_DELAY_MS)
                 if (player.currentMediaItem?.mediaId != mediaId || player.currentMediaItemIndex != retryIndex) {
                     return@launch
@@ -3055,6 +3068,16 @@ class MusicService :
     private fun isRemotePlaybackError(error: PlaybackException): Boolean =
         error.errorCode == PlaybackException.ERROR_CODE_REMOTE_ERROR
 
+    /**
+     * Deterministic container failures: re-resolving the same URL reproduces them,
+     * so the slskd retry must be skipped in favor of an immediate YouTube fallback.
+     */
+    private fun isUnparseableContainer(error: PlaybackException): Boolean =
+        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE ||
+            (error.cause as? PlaybackException)?.let(::isUnparseableContainer) == true
+
     private fun isStreamClientError(error: PlaybackException): Boolean =
         error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE ||
@@ -3171,12 +3194,27 @@ class MusicService :
         Timber.tag(TAG).d("Performing aggressive cache clear")
 
         songUrlCache.invalidate(mediaId)
+        evictSlskdSpans(mediaId)
 
         try {
             playerCache.removeResource(mediaId)
             Timber.tag(TAG).d("Cleared player cache")
         } catch (e: Exception) {
             Timber.tag(TAG).e("Failed to clear player cache type=${e::class.simpleName ?: "unknown"}")
+        }
+    }
+
+    /**
+     * Drops cached spans for the active slskd override, if any. Must run while the
+     * override entry still exists — call before [SlskdOverrideStore.remove].
+     */
+    private fun evictSlskdSpans(mediaId: String) {
+        val override = SlskdOverrideStore.get(mediaId) ?: return
+        try {
+            playerCache.removeResource(SlskdOverrideStore.cacheKeyFor(mediaId, override.transferId))
+            Timber.tag(TAG).d("Cleared slskd spans for $mediaId")
+        } catch (e: Exception) {
+            Timber.tag(TAG).e("Failed to clear slskd spans type=${e::class.simpleName ?: "unknown"}")
         }
     }
 
@@ -3453,7 +3491,9 @@ class MusicService :
     private val slskdRetried = mutableSetOf<String>()
 
     private fun handleSlskdStreamError(mediaId: String, error: PlaybackException) {
-        if (slskdRetried.add(mediaId)) {
+        // Deterministic container failures re-fail identically: skip the slskd retry
+        // and fall straight through to YouTube instead of stalling on RETRY_DELAY_MS.
+        if (!isUnparseableContainer(error) && slskdRetried.add(mediaId)) {
             Timber.tag(TAG).d("Retrying slskd stream for $mediaId before falling back")
             retryJob?.cancel()
             retryJob =
@@ -3471,6 +3511,7 @@ class MusicService :
             return
         }
         slskdRetried.remove(mediaId)
+        evictSlskdSpans(mediaId)
         SlskdOverrideStore.remove(mediaId)
         incrementRetryCount(mediaId)
         toastOnMain(R.string.slskd_fell_back)
@@ -3903,7 +3944,13 @@ class MusicService :
                     )
                     recoverSongDeduped(mediaId)
                     currentStreamClient.value = SLSKD_CLIENT_NAME
-                    return@Factory dataSpec.withResolvedStream(
+                    // Partition slskd bytes under their own cache key: sharing mediaId with
+                    // YouTube spans lets stale/truncated spans from either source poison the other.
+                    val slskdSpec =
+                        dataSpec.buildUpon()
+                            .setKey(SlskdOverrideStore.cacheKeyFor(mediaId, override.transferId))
+                            .build()
+                    return@Factory slskdSpec.withResolvedStream(
                         CachedStreamUrl(
                             url = override.fileUrl,
                             requestHeaders = mapOf(SlskdApiClient.API_KEY_HEADER to dataStore.get(SlskdApiKeyKey, "")),
@@ -4093,7 +4140,16 @@ class MusicService :
         DefaultMediaSourceFactory(
             createDataSourceFactory(normalizationProcessor, playerProvider),
             ExtractorsFactory {
-                arrayOf(MatroskaExtractor(), FragmentedMp4Extractor(), Mp4Extractor())
+                arrayOf(
+                    MatroskaExtractor(),
+                    FragmentedMp4Extractor(),
+                    Mp4Extractor(),
+                    FlacExtractor(),
+                    WavExtractor(),
+                    OggExtractor(),
+                    Mp3Extractor(),
+                    AdtsExtractor(),
+                )
             },
         )
 

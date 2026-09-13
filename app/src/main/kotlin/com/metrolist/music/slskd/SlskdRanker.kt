@@ -27,8 +27,10 @@ data class SlskdCandidate(
 )
 
 object SlskdRanker {
-    val losslessExtensions = setOf("flac", "wav", "aiff")
-    val supportedExtensions = losslessExtensions + setOf("m4a", "ogg", "opus", "mp3")
+    // No Media3 extractor exists for AIFF, so it is excluded: advertising it
+    // guarantees a PARSING_CONTAINER_UNSUPPORTED failure at playback.
+    val losslessExtensions = setOf("flac", "wav")
+    val supportedExtensions = losslessExtensions + setOf("m4a", "mka", "webm", "ogg", "opus", "mp3")
 
     const val MAX_RESULTS = 20
 

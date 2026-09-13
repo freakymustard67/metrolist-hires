@@ -85,6 +85,32 @@ class SlskdRankerTest {
     }
 
     @Test
+    fun `aiff is excluded since no extractor can parse it`() {
+        val ranked =
+            SlskdRanker.rank(
+                listOf(
+                    candidate("song.aiff"),
+                    candidate("song.flac"),
+                ),
+            )
+
+        assertEquals(listOf("song.flac"), ranked.map { it.filename })
+    }
+
+    @Test
+    fun `matroska audio containers are accepted`() {
+        val ranked =
+            SlskdRanker.rank(
+                listOf(
+                    candidate("song.mka"),
+                    candidate("song.webm"),
+                ),
+            )
+
+        assertEquals(2, ranked.size)
+    }
+
+    @Test
     fun `free upload slot is preferred on a full tie`() {
         val ranked =
             SlskdRanker.rank(

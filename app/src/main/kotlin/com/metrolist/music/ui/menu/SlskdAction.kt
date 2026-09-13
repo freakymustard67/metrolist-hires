@@ -154,22 +154,30 @@ class SlskdSession(
             )
         var tracked =
             enqueued.batch.transfers.find { it.filename == file.filename }
-                ?: active.listUserDownloads(file.username).find { it.filename == file.filename && !it.isTerminal }
+                // already queued elsewhere: slskd reports it as a failure with HTTP 200 and an
+                // empty batch, so attach to the live record (terminal or not)
+                ?: active.listUserDownloads(file.username).find { it.filename == file.filename && it.size == file.size }
                 ?: throw SlskdException.TransferFailed(
                     enqueued.failures.firstOrNull()?.message,
                 )
+        if (tracked.isTerminal) {
+            return finishTerminal(active, mediaId, file, destination, tracked)
+        }
         val batchId = enqueued.batch.id
         var final: SlskdTransfer? = null
-        var streamAttempted = false
+        var streamExhausted = false
         try {
             val started = System.currentTimeMillis()
             while (true) {
                 coroutineContext.ensureActive()
+                // the fresh batch may be empty (already-queued case): never treat it as the
+                // source of truth, always reconcile against the tracked id first
                 val batch = active.pollBatch(batchId)
                 val current =
                     batch.transfers.find { it.id == tracked.id }
-                        ?: batch.transfers.find { it.filename == file.filename && !it.isTerminal }
-                        ?: active.listUserDownloads(file.username).find { it.filename == file.filename && !it.isTerminal }
+                        ?: active.listUserDownloads(file.username).find { it.id == tracked.id }
+                        ?: batch.transfers.find { it.filename == file.filename && it.size == file.size }
+                        ?: active.listUserDownloads(file.username).find { it.filename == file.filename && it.size == file.size }
                 if (current != null) {
                     tracked = current
                     onProgress(progressOf(current))
@@ -177,16 +185,17 @@ class SlskdSession(
                         final = current
                         break
                     }
-                    if (!streamAttempted && current.size > 0
+                    if (!streamExhausted && current.size > 0
                         && current.bytesTransferred >= SlskdConfig.streamStartBytes(current.size)
                     ) {
-                        streamAttempted = true
                         try {
                             tryStartStream(active, mediaId, current)?.let { return it }
+                            // null means the server has no stream endpoint: stop probing
+                            streamExhausted = true
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            // fall through to download-then-play (old servers, probe blips)
+                            // transient probe failure: try again on the next poll
                         }
                     }
                 }
@@ -201,7 +210,16 @@ class SlskdSession(
             }
             throw e
         }
-        val completed = final ?: throw SlskdException.TransferFailed(null)
+        return finishTerminal(active, mediaId, file, destination, final ?: throw SlskdException.TransferFailed(null))
+    }
+
+    private suspend fun finishTerminal(
+        active: SlskdApiClient,
+        mediaId: String,
+        file: RankedSlskdFile,
+        destination: String,
+        completed: SlskdTransfer,
+    ): SlskdOutcome {
         if (!completed.isSuccessful) {
             throw SlskdException.TransferFailed(completed.exception)
         }

@@ -18,6 +18,11 @@ object SlskdOverrideStore {
 
     fun get(mediaId: String): SlskdOverride? = overrides[mediaId]
 
+    fun cacheKeyFor(
+        mediaId: String,
+        transferId: String?,
+    ): String = "slskd:${transferId ?: mediaId}"
+
     fun put(override: SlskdOverride) {
         overrides[override.mediaId] = override
     }

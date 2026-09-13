@@ -7,6 +7,7 @@ package com.metrolist.music.slskd
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.HttpTimeout
@@ -28,6 +29,7 @@ import io.ktor.http.contentType
 import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -55,32 +57,22 @@ sealed interface SlskdFileProbe {
     data object Missing : SlskdFileProbe
 }
 
-class SlskdApiClient(
-    baseUrl: String,
+class SlskdApiClient private constructor(
+    val baseUrl: String,
     private val apiKey: String,
+    private val client: HttpClient,
 ) {
-    val baseUrl: String = SlskdConfig.normalizeBaseUrl(baseUrl)
+    constructor(baseUrl: String, apiKey: String) : this(
+        baseUrl = SlskdConfig.normalizeBaseUrl(baseUrl),
+        apiKey = apiKey,
+        client = createClient(apiKey, OkHttp.create()),
+    )
 
-    private val json = Json {
-        isLenient = true
-        ignoreUnknownKeys = true
-        explicitNulls = false
-    }
-
-    private val client =
-        HttpClient(OkHttp) {
-            install(ContentNegotiation) {
-                json(json)
-            }
-            install(HttpTimeout) {
-                connectTimeoutMillis = CONNECT_TIMEOUT_MILLIS
-                requestTimeoutMillis = REQUEST_TIMEOUT_MILLIS
-            }
-            defaultRequest {
-                header(API_KEY_HEADER, apiKey)
-            }
-            expectSuccess = false
-        }
+    internal constructor(baseUrl: String, apiKey: String, engine: HttpClientEngine) : this(
+        baseUrl = SlskdConfig.normalizeBaseUrl(baseUrl),
+        apiKey = apiKey,
+        client = createClient(apiKey, engine),
+    )
 
     fun close() {
         client.close()
@@ -114,6 +106,8 @@ class SlskdApiClient(
                 HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden -> false
                 else -> throw mapErrorStatus(checkResponse, relayGuarded = false)
             }
+        // status-only read: release the body without materializing it
+        checkResponse.cancel()
         return SlskdSessionProbe(
             reachable = true,
             securityEnabled = securityEnabled,
@@ -346,12 +340,14 @@ class SlskdApiClient(
             } catch (e: Exception) {
                 throw mapTransportError(e)
             }
+        // never materialize bodies here: on 200 a range-ignoring server would make us
+        // buffer the whole file, and on any status an unread body pins the connection
+        if (response.status != HttpStatusCode.PartialContent) {
+            response.cancel()
+        }
         return when (response.status) {
             HttpStatusCode.PartialContent -> SlskdFileProbe.RangeSupported(url)
-            HttpStatusCode.OK -> {
-                response.bodyAsText()
-                SlskdFileProbe.LinearOnly(url)
-            }
+            HttpStatusCode.OK -> SlskdFileProbe.LinearOnly(url)
             HttpStatusCode.NotFound, HttpStatusCode.RequestedRangeNotSatisfiable -> SlskdFileProbe.Missing
             else -> throw mapErrorStatus(response, relayGuarded = false)
         }
@@ -445,5 +441,29 @@ class SlskdApiClient(
         const val REQUEST_TIMEOUT_MILLIS = 30_000L
         const val MAX_ENQUEUE_ATTEMPTS = 2
         const val ERROR_BODY_LIMIT = 512
+
+        private val clientJson = Json {
+            isLenient = true
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
+
+        internal fun createClient(
+            apiKey: String,
+            engine: HttpClientEngine,
+        ): HttpClient =
+            HttpClient(engine) {
+                install(ContentNegotiation) {
+                    json(clientJson)
+                }
+                install(HttpTimeout) {
+                    connectTimeoutMillis = CONNECT_TIMEOUT_MILLIS
+                    requestTimeoutMillis = REQUEST_TIMEOUT_MILLIS
+                }
+                defaultRequest {
+                    header(API_KEY_HEADER, apiKey)
+                }
+                expectSuccess = false
+            }
     }
 }
