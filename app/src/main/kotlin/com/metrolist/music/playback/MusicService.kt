@@ -2195,12 +2195,14 @@ class MusicService :
         transferId: String?,
     ) {
         SlskdOverrideStore.put(SlskdOverride(mediaId, fileUrl, transferId))
+        Timber.tag(TAG).i("slskd override set for $mediaId, switching source")
         retrySlskdMedia(mediaId)
         toastOnMain(R.string.slskd_now_playing)
     }
 
     fun clearSlskdOverride(mediaId: String) {
         SlskdOverrideStore.remove(mediaId)
+        Timber.tag(TAG).i("slskd override cleared for $mediaId, reverting to YouTube")
         retrySlskdMedia(mediaId)
         toastOnMain(R.string.slskd_reverted)
     }
@@ -2213,17 +2215,26 @@ class MusicService :
 
     private fun retrySlskdMedia(mediaId: String) {
         scope.launch {
-            performAggressiveCacheClear(mediaId)
             val retryIndex = player.currentMediaItemIndex
             if (player.currentMediaItem?.mediaId != mediaId || retryIndex == C.INDEX_UNSET) {
+                Timber.tag(TAG).w("Stale slskd switch for $mediaId, current item changed")
                 return@launch
             }
+            // Stop FIRST: otherwise YouTube keeps playing and re-caching under the same
+            // mediaId while we clear, and the resolver then serves those stale spans.
+            val resumePosition = player.currentPosition
+            val wasPlaying = player.isPlaying
+            player.stop()
+            performAggressiveCacheClear(mediaId)
             delay(RETRY_DELAY_MS)
             if (player.currentMediaItem?.mediaId != mediaId || player.currentMediaItemIndex != retryIndex) {
                 return@launch
             }
-            player.seekTo(retryIndex, player.currentPosition)
+            player.seekTo(retryIndex, resumePosition)
             player.prepare()
+            if (wasPlaying) {
+                player.play()
+            }
         }
     }
 
@@ -3851,6 +3862,7 @@ class MusicService :
             val mediaId = dataSpec.key ?: error("No media id")
             SlskdOverrideStore.get(mediaId)?.let { override ->
                 if (dataStore.get(SlskdEnabledKey, false)) {
+                    Timber.tag(TAG).i("Resolving $mediaId from slskd override")
                     applyAudioNormalizationBeforePlayback(
                         processor = normalizationProcessor,
                         playerProvider = playerProvider,
