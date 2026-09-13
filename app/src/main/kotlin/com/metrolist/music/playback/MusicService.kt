@@ -2194,13 +2194,17 @@ class MusicService :
         fileUrl: String,
         transferId: String?,
     ) {
+        val current = SlskdOverrideStore.get(mediaId)
         SlskdOverrideStore.put(SlskdOverride(mediaId, fileUrl, transferId))
         slskdRetried.remove(mediaId)
+        if (current?.fileUrl == fileUrl) {
+            Timber.tag(TAG).i("slskd override for $mediaId unchanged, already playing")
+            return
+        }
         Timber.tag(TAG).i("slskd override set for $mediaId, switching source")
         retrySlskdMedia(mediaId)
         toastOnMain(R.string.slskd_now_playing)
     }
-
     fun clearSlskdOverride(mediaId: String) {
         SlskdOverrideStore.remove(mediaId)
         slskdRetried.remove(mediaId)
@@ -2216,28 +2220,30 @@ class MusicService :
     }
 
     private fun retrySlskdMedia(mediaId: String) {
-        scope.launch {
-            val retryIndex = player.currentMediaItemIndex
-            if (player.currentMediaItem?.mediaId != mediaId || retryIndex == C.INDEX_UNSET) {
-                Timber.tag(TAG).w("Stale slskd switch for $mediaId, current item changed")
-                return@launch
+        retryJob?.cancel()
+        retryJob =
+            scope.launch {
+                val retryIndex = player.currentMediaItemIndex
+                if (player.currentMediaItem?.mediaId != mediaId || retryIndex == C.INDEX_UNSET) {
+                    Timber.tag(TAG).w("Stale slskd switch for $mediaId, current item changed")
+                    return@launch
+                }
+                // Stop FIRST: otherwise YouTube keeps playing and re-caching under the same
+                // mediaId while we clear, and the resolver then serves those stale spans.
+                val resumePosition = player.currentPosition
+                val wasPlaying = player.isPlaying
+                player.stop()
+                performAggressiveCacheClear(mediaId)
+                delay(RETRY_DELAY_MS)
+                if (player.currentMediaItem?.mediaId != mediaId || player.currentMediaItemIndex != retryIndex) {
+                    return@launch
+                }
+                player.seekTo(retryIndex, resumePosition)
+                player.prepare()
+                if (wasPlaying) {
+                    player.play()
+                }
             }
-            // Stop FIRST: otherwise YouTube keeps playing and re-caching under the same
-            // mediaId while we clear, and the resolver then serves those stale spans.
-            val resumePosition = player.currentPosition
-            val wasPlaying = player.isPlaying
-            player.stop()
-            performAggressiveCacheClear(mediaId)
-            delay(RETRY_DELAY_MS)
-            if (player.currentMediaItem?.mediaId != mediaId || player.currentMediaItemIndex != retryIndex) {
-                return@launch
-            }
-            player.seekTo(retryIndex, resumePosition)
-            player.prepare()
-            if (wasPlaying) {
-                player.play()
-            }
-        }
     }
 
     fun addToTargetPlaylist() {
