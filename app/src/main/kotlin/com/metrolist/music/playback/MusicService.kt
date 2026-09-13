@@ -2195,6 +2195,7 @@ class MusicService :
         transferId: String?,
     ) {
         SlskdOverrideStore.put(SlskdOverride(mediaId, fileUrl, transferId))
+        slskdRetried.remove(mediaId)
         Timber.tag(TAG).i("slskd override set for $mediaId, switching source")
         retrySlskdMedia(mediaId)
         toastOnMain(R.string.slskd_now_playing)
@@ -2202,6 +2203,7 @@ class MusicService :
 
     fun clearSlskdOverride(mediaId: String) {
         SlskdOverrideStore.remove(mediaId)
+        slskdRetried.remove(mediaId)
         Timber.tag(TAG).i("slskd override cleared for $mediaId, reverting to YouTube")
         retrySlskdMedia(mediaId)
         toastOnMain(R.string.slskd_reverted)
@@ -3077,10 +3079,12 @@ class MusicService :
             handleFinalFailure()
             return
         }
-
         if (mediaId != null && SlskdOverrideStore.contains(mediaId)) {
-            Timber.tag(TAG).w("slskd stream failed for $mediaId, falling back to YouTube")
-            handleSlskdStreamError(mediaId)
+            Timber.tag(TAG).w(
+                error,
+                "slskd stream failed for $mediaId: code=${error.errorCode} msg=${error.message}",
+            )
+            handleSlskdStreamError(mediaId, error)
             return
         }
 
@@ -3437,10 +3441,30 @@ class MusicService :
     }
 
     /**
-     * Drops a failed slskd override and retries the same item so the resolver
-     * falls through to the regular YouTube path.
+     * Recovers a failed slskd stream. The first failure keeps the override and re-resolves
+     * (transient stalls self-heal); only a repeated failure drops to YouTube.
      */
-    private fun handleSlskdStreamError(mediaId: String) {
+    private val slskdRetried = mutableSetOf<String>()
+
+    private fun handleSlskdStreamError(mediaId: String, error: PlaybackException) {
+        if (slskdRetried.add(mediaId)) {
+            Timber.tag(TAG).d("Retrying slskd stream for $mediaId before falling back")
+            retryJob?.cancel()
+            retryJob =
+                scope.launch {
+                    player.stop()
+                    performAggressiveCacheClear(mediaId)
+                    delay(RETRY_DELAY_MS)
+                    if (player.currentMediaItem?.mediaId != mediaId || player.currentMediaItemIndex == C.INDEX_UNSET) {
+                        return@launch
+                    }
+                    player.seekTo(player.currentMediaItemIndex, player.currentPosition)
+                    player.prepare()
+                    player.play()
+                }
+            return
+        }
+        slskdRetried.remove(mediaId)
         SlskdOverrideStore.remove(mediaId)
         incrementRetryCount(mediaId)
         toastOnMain(R.string.slskd_fell_back)
