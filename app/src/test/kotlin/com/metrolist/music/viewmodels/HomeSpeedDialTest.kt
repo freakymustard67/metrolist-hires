@@ -6,19 +6,47 @@ import org.junit.Test
 
 class HomeSpeedDialTest {
     @Test
-    fun `home recommendations fill sparse speed dial without replacing pinned items`() {
+    fun `recent and quick pick songs fill sparse speed dial without replacing pinned items`() {
         val pinned = song("pinned")
-        val home = song("home")
+        val recent = song("recent")
 
         val result =
             buildSpeedDialItems(
                 pinned = listOf(pinned),
-                keepListening = emptyList(),
                 quickPicks = emptyList(),
-                home = listOf(pinned.copy(title = "duplicate"), home),
+                recent = listOf(pinned.copy(title = "duplicate"), recent),
             )
 
-        assertEquals(listOf(pinned, home), result)
+        assertEquals(listOf(pinned, recent), result)
+    }
+
+    @Test
+    fun `recent plays come before quick picks`() {
+        val recent = song("recent")
+        val quickPick = song("quick-pick")
+
+        val result =
+            buildSpeedDialItems(
+                pinned = emptyList(),
+                quickPicks = listOf(quickPick),
+                recent = listOf(recent),
+            )
+
+        assertEquals(listOf(recent, quickPick), result)
+    }
+
+    @Test
+    fun `speed dial holds at most 27 entries`() {
+        val pinned = (1..30).map { song("pinned-$it") }
+
+        val result =
+            buildSpeedDialItems(
+                pinned = pinned,
+                quickPicks = emptyList(),
+                recent = emptyList(),
+            )
+
+        assertEquals(27, result.size)
     }
 
     private fun song(id: String) =

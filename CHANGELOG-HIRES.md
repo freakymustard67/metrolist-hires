@@ -40,6 +40,31 @@ Self-hosted slskd as an opt-in high-resolution audio source. YouTube Music stays
   the playback source); downloaded-only and seek-limited notices; "Revert to YouTube".
   New `MediaItem`s are never created.
 
+## Homepage slimming (app)
+
+The home screen renders exactly three sections — speed dial, quick picks, recent songs —
+and its load path makes **no network requests** (only the optional account-avatar lookup
+when a cookie is set).
+
+- Removed sections: Daily discover, Keep listening, Account playlists, Forgotten favorites,
+  From the community, Similar recommendations, every official API feed section (with its
+  chips row, podcast-chip handling and infinite scroll), and Mood & Genres.
+- That removes the ~30 YouTube requests each home load fanned out: 5× `next` + 5× `related`
+  (daily discover), 3× `artist` + 2× `next/related` + up to 5× `playlist` (community
+  playlists), `explore`, the similar-recommendation artist/song/album calls, and the
+  `next`+`related` pair inside quick picks.
+- `HomeViewModel.load()` is local-only (Room); `getRandomItem()` and the shuffle FAB draw
+  from quick picks + recent plays. Quick picks no longer enriches with YouTube "similar
+  songs" (that call only ever added songs already in the local DB).
+- New `DatabaseDao.recentSongs(limit)`: latest play per song, newest first, deduped.
+  Speed dial auto-fills from pinned + recent + quick picks; section order shuffling
+  (`RandomizeHomeOrderKey`) still applies, now across three sections.
+- Kept: pull-to-refresh, wired sync, wrapped card (unchanged, date-gated off), shuffle FAB,
+  recognition. Mood & Genres / New Release screens remain compiled and routable but are no
+  longer linked from home.
+- Tests: new `RecentSongsTest` (ordering by latest play, dedup, limit, never-played) and
+  updated `HomeSpeedDialTest`; full app suite 203/203.
+
 ## Server changes (slskd-hires repo)
 
 - `GET api/v0/files/downloads/files/{base64FilePath}` — authenticated ranged file serving.
@@ -60,9 +85,8 @@ Self-hosted slskd as an opt-in high-resolution audio source. YouTube Music stays
 
 ## Perf note
 
-Homepage slowness is pre-existing, not from this integration: homepage collectors never read
-slskd keys (all slskd reads live in settings/menus/playback paths and are gated on
-`SlskdEnabledKey`). Measured hotspots live in `HomeViewModel` (serial YouTube fan-outs,
-N+1 Room re-queries, unbounded liked-table scan) and `HomeScreen` (~37 collectors, per-card
-Room collects, 2x2 thumbnail grids). No perf edits made in this change; see handoff for the
-ranked list.
+The homepage slowdown was the feed fan-out: one home load issued ~30 YouTube requests
+(daily discover, community playlists, similar recommendations, explore, plus the feed
+itself) and rendered 10 section types with their shimmer hosts. That is gone — see
+"Homepage slimming" above. Untouched hotspots, if more is ever wanted: the per-card
+`database.song(...)` collect in home list rows and the N+1 Room re-queries behind them.
