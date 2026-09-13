@@ -108,6 +108,14 @@ class RecommendationsTest {
         assertEquals(listOf("liked-1", "liked-2", "liked-3"), seeds.map { it.id })
     }
 
+    @Test
+    fun `seeds are fetched through the radio endpoint, not the empty related tab`() {
+        val endpoint = radioEndpointFor("track-id")
+
+        assertEquals("track-id", endpoint.videoId)
+        assertEquals("RDAMVMtrack-id", endpoint.playlistId)
+    }
+
     private fun song(id: String) =
         Song(
             song = SongEntity(id = id, title = id),

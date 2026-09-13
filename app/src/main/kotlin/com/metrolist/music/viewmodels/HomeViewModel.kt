@@ -44,6 +44,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -143,6 +144,15 @@ internal fun buildRecommendations(
 
     return result
 }
+
+/**
+ * The radio endpoint for a seed — the same call the player's radio queue uses.
+ *
+ * Verified against the live API: `next(WatchEndpoint(videoId))` returns
+ * `relatedEndpoint = null` on WEB_REMIX (for videos and for ATV music tracks alike), while
+ * this radio form returns the seed plus ~50 related songs. Do not go back to the related tab.
+ */
+internal fun radioEndpointFor(seedId: String) = WatchEndpoint(videoId = seedId, playlistId = "RDAMVM$seedId")
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -309,26 +319,83 @@ suspend fun getRandomItem(): YTItem? {
         val seeds = recommendationSeeds()
         if (seeds.isEmpty()) return
 
-        val relatedBySeed = mutableMapOf<String, List<SongItem>>()
-        for (seed in seeds) {
-            val endpoint =
-                YouTube.next(WatchEndpoint(videoId = seed.id)).getOrNull()?.relatedEndpoint
-                    ?: continue
-            YouTube.related(endpoint)
-                .onSuccess { page ->
-                    relatedBySeed[seed.id] =
-                        page.songs
-                            .filterExplicit(hideExplicit)
-                            .filterVideoSongs(hideVideoSongs)
-                            .filterYoutubeShorts(hideShorts)
-                }.onFailure { reportException(it) }
-        }
+        val playedRecently = database.recentSongs(RECOMMENDATION_EXCLUDE_COUNT).first().map { it.id }.toSet()
+
+        val relatedBySeed =
+            fetchRelatedSongs(seeds, hideExplicit, hideVideoSongs, hideShorts, playedRecently)
+                .ifEmpty { localRelatedSongs(seeds, hideVideoSongs, playedRecently) }
 
         val built = buildRecommendations(seeds, relatedBySeed)
         if (built.isEmpty()) return
 
         recommendations.value = built
         writeRecommendationsCache(RecommendationsCache(System.currentTimeMillis(), built))
+    }
+
+    /**
+     * The watch-next "related" tab is empty on WEB_REMIX, so the radio queue is the source:
+     * it is the same endpoint the player uses, and its items are the songs that follow from
+     * the seed. One request per seed, plus one retry because the first call after a cold
+     * start can race visitor-data setup.
+     */
+    private suspend fun fetchRelatedSongs(
+        seeds: List<RecommendationSeed>,
+        hideExplicit: Boolean,
+        hideVideoSongs: Boolean,
+        hideShorts: Boolean,
+        exclude: Set<String>,
+    ): Map<String, List<SongItem>> {
+        val result = mutableMapOf<String, List<SongItem>>()
+
+        for (seed in seeds) {
+            val endpoint = radioEndpointFor(seed.id)
+            var page = YouTube.next(endpoint).onFailure { reportException(it) }.getOrNull()
+
+            if (page == null) {
+                delay(RECOMMENDATION_RETRY_DELAY)
+                page = YouTube.next(endpoint).onFailure { reportException(it) }.getOrNull()
+            }
+
+            val songs =
+                page?.items
+                    ?.filter { it.id != seed.id && it.id !in exclude }
+                    ?.filterExplicit(hideExplicit)
+                    ?.filterVideoSongs(hideVideoSongs)
+                    ?.filterYoutubeShorts(hideShorts)
+                    .orEmpty()
+
+            if (songs.isNotEmpty()) result[seed.id] = songs
+        }
+
+        return result
+    }
+
+    /** Offline fallback: the songs the app already mapped as related to what was played. */
+    private suspend fun localRelatedSongs(
+        seeds: List<RecommendationSeed>,
+        hideVideoSongs: Boolean,
+        exclude: Set<String>,
+    ): Map<String, List<SongItem>> {
+        val result = mutableMapOf<String, List<SongItem>>()
+
+        for (seed in seeds) {
+            val songs =
+                database.getRelatedSongs(seed.id).first()
+                    .filter { it.id !in exclude }
+                    .filterVideoSongs(hideVideoSongs)
+                    .map { song ->
+                        SongItem(
+                            id = song.id,
+                            title = song.title,
+                            artists = song.artists.map { Artist(name = it.name, id = it.id) },
+                            thumbnail = song.thumbnailUrl ?: "",
+                        )
+                    }
+
+            if (songs.isNotEmpty()) result[seed.id] = songs
+        }
+
+        return result
     }
 
     /** Recently played first, then liked songs: the row follows what the user actually listens to. */
@@ -448,8 +515,14 @@ suspend fun getRandomItem(): YTItem? {
         /** How long a recommendation set is reused before it is fetched again. */
         const val RECOMMENDATIONS_TTL = 12 * 60 * 60 * 1000L
 
-        /** Seeds per refill; each seed costs one `next` + one `related` request. */
+        /** Seeds per refill; each seed costs one radio request. */
         const val RECOMMENDATION_SEED_COUNT = 3
+
+        /** Songs played this recently are not worth recommending back. */
+        const val RECOMMENDATION_EXCLUDE_COUNT = 50
+
+        /** Wait before retrying a seed whose first request came back empty. */
+        const val RECOMMENDATION_RETRY_DELAY = 1_500L
     }
 
     fun loadHomeData() {
