@@ -72,8 +72,13 @@ old per-load fan-out.
 
 - Seeds = your 2 most recent plays + 1 liked song, topped up when either side is short
   (`recentSongs` + `likedSongsByCreateDateDesc`; a song that is both is used once).
-- Per refill: one `next` + one `related` per seed (max 6 requests), filtered by the
-  explicit/video/shorts preferences. Each card shows "Because you listened to <seed>".
+- Fetched through the **radio endpoint** (`RDAMVM<id>`, the call the player's radio queue
+  uses). The watch-next related tab is empty on WEB_REMIX — `relatedEndpoint` comes back
+  `null` for videos and ATV tracks alike, which is why the first two builds showed an empty
+  row. Verified against the live API before shipping the fix.
+- One request per seed (max 3) plus one retry, the last 50 played songs are excluded, and
+  the app's own related-song map is the offline fallback. Each card shows
+  "Because you listened to <seed>".
 - Cached in DataStore (`RecommendationsCacheKey`) with a 12 h TTL: the row paints from
   cache on every open, and the refill happens in the background after the home is up.
   A refill is single-flight — no overlapping refresh storms.
