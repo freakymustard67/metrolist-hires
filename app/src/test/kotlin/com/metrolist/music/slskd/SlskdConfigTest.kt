@@ -60,4 +60,15 @@ class SlskdConfigTest {
         assertTrue('/' !in encoded)
         assertTrue('+' !in encoded)
     }
+
+    @Test(expected = SlskdException.Config::class)
+    fun `api path is rejected`() {
+        SlskdConfig.normalizeBaseUrl("http://host:5030/api/v0")
+    }
+
+    @Test(expected = SlskdException.Config::class)
+    fun `query string is rejected`() {
+        SlskdConfig.normalizeBaseUrl("http://host:5030/?foo=bar")
+    }
+
 }

@@ -19,6 +19,18 @@ object SlskdConfig {
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
             throw SlskdException.Config("Server URL must start with http:// or https://")
         }
+        val uri = runCatching { java.net.URI(trimmed) }.getOrNull()
+            ?: throw SlskdException.Config("Server URL is not a valid URL")
+        if (!uri.query.isNullOrEmpty() || !uri.fragment.isNullOrEmpty()) {
+            throw SlskdException.Config("Server URL must not include a query or fragment")
+        }
+        // Calls append /api/v0/... to this base, so a path containing the API root
+        // would double it (http://host/api/v0 -> .../api/v0/api/v0/...). A plain
+        // reverse-proxy prefix (slskd web.url_base) composes correctly and stays allowed.
+        val segments = uri.path.orEmpty().split('/').filter { it.isNotEmpty() }
+        if (segments.any { it.equals("api", ignoreCase = true) }) {
+            throw SlskdException.Config("Server URL must not include the /api path; use http(s)://host:port only")
+        }
         return trimmed
     }
 

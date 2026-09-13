@@ -207,7 +207,7 @@ class SlskdApiClient private constructor(
         destination: String? = null,
     ): SlskdEnqueueBatchResult {
         var batchId = UUID.randomUUID().toString()
-        repeat(MAX_ENQUEUE_ATTEMPTS) { attempt ->
+        repeat(MAX_ENQUEUE_ATTEMPTS) {
             val response =
                 postJson(
                     path = "transfers/downloads/batches",
@@ -220,14 +220,16 @@ class SlskdApiClient private constructor(
                             options = destination?.let { SlskdEnqueueBatchOptions(destination = it) },
                         ),
                     relayGuarded = true,
-                    duplicateAsNull = attempt < MAX_ENQUEUE_ATTEMPTS - 1,
+                    duplicateAsNull = true,
                 ) ?: run {
                     batchId = UUID.randomUUID().toString()
                     return@repeat
                 }
             return parseBody(response)
         }
-        throw SlskdException.DuplicateBatch()
+        // Our own regenerated id collided twice: not a user-facing "already queued"
+        // state (that arrives as HTTP 200 + failures), so report it as unexpected.
+        throw SlskdException.BadResponse(HttpStatusCode.Conflict.value, null)
     }
 
     suspend fun pollBatch(batchId: String): SlskdBatch {
@@ -417,11 +419,14 @@ class SlskdApiClient private constructor(
             }
         }
 
+    // Only genuine transport failures become Network/Timeout. Anything else is a
+    // serialization or programming bug: rethrow so it surfaces as "unexpected" (and
+    // gets reported) instead of "couldn't reach the server".
     private fun mapTransportError(e: Exception): SlskdException =
         when (e) {
             is HttpRequestTimeoutException, is SocketTimeoutException -> SlskdException.Timeout(e)
             is IOException -> SlskdException.Network(e)
-            else -> SlskdException.Network(IOException(e.message, e))
+            else -> throw e
         }
 
     private fun nowMillis(): Long = System.currentTimeMillis()

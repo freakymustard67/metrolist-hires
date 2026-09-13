@@ -222,6 +222,10 @@ fun SlskdSettings(
 
         InfoLabel(text = stringResource(R.string.slskd_api_key_desc))
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        InfoLabel(text = stringResource(R.string.slskd_https_nudge))
+
         Spacer(modifier = Modifier.height(27.dp))
     }
 

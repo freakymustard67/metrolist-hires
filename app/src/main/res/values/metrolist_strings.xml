@@ -1028,6 +1028,6 @@
     <string name="slskd_error_soulseek_disconnected">slskd isn\'t logged into Soulseek. Add your Soulseek username and password to slskd.yml and restart it.</string>
     <string name="slskd_now_playing">Playing high-res via slskd</string>
     <string name="slskd_buffering">Buffering high-res audio…</string>
-    <string name="slskd_fell_back">slskd stream failed, playing from YouTube instead</string>
+    <string name="slskd_https_nudge">The API key travels in the clear over plain http. Fine at home — use https through a reverse proxy if you ever expose the server.</string>
     <string name="slskd_reverted">Reverted to YouTube playback</string>
 </resources>
