@@ -26,6 +26,8 @@
     <string name="account">Account</string>
     <string name="quick_picks">Quick picks</string>
     <string name="recent_songs">Recent songs</string>
+    <string name="recommended_for_you">Recommended for you</string>
+    <string name="because_you_listened">Because you listened to %1$s</string>
     <string name="quick_picks_empty">Listen to songs to generate your quick picks</string>
     <string name="forgotten_favorites">Forgotten favorites</string>
     <string name="keep_listening">Keep listening</string>

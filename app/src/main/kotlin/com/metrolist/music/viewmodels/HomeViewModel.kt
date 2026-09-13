@@ -11,14 +11,20 @@ import androidx.lifecycle.viewModelScope
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.SongItem
+import com.metrolist.innertube.models.WatchEndpoint
+import com.metrolist.innertube.models.filterExplicit
+import com.metrolist.innertube.models.filterYoutubeShorts
 import kotlinx.coroutines.flow.combine
 import com.metrolist.innertube.models.YTItem
 import com.metrolist.innertube.models.filterVideoSongs
 import com.metrolist.music.constants.AccountNameKey
+import com.metrolist.music.constants.HideExplicitKey
 import com.metrolist.music.constants.HideVideoSongsKey
+import com.metrolist.music.constants.HideYoutubeShortsKey
 import com.metrolist.music.constants.InnerTubeCookieKey
 import com.metrolist.music.constants.QuickPicks
 import com.metrolist.music.constants.QuickPicksKey
+import com.metrolist.music.constants.RecommendationsCacheKey
 import com.metrolist.music.constants.ShowWrappedCardKey
 import com.metrolist.music.constants.WrappedSeenKey
 import com.metrolist.music.db.MusicDatabase
@@ -37,6 +43,9 @@ import com.metrolist.music.utils.reportException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -58,6 +67,69 @@ internal fun buildSpeedDialItems(
         .distinctBy { it.id }
         .take(27)
 
+/**
+ * One "because you listened to <seed>" recommendation. Flat and primitive-only so it
+ * can go straight into the DataStore cache.
+ */
+@Serializable
+data class Recommendation(
+    val id: String,
+    val title: String,
+    val artists: List<String>,
+    val thumbnail: String,
+    val seedId: String,
+    val seedTitle: String,
+)
+
+data class RecommendationSeed(
+    val id: String,
+    val title: String,
+)
+
+@Serializable
+internal data class RecommendationsCache(
+    val refreshedAt: Long,
+    val items: List<Recommendation>,
+)
+
+/**
+ * Interleaves the fetched related songs by seed. A song suggested by several seeds is
+ * credited to the first one, and a seed never recommends itself.
+ */
+internal fun buildRecommendations(
+    seeds: List<RecommendationSeed>,
+    relatedBySeed: Map<String, List<SongItem>>,
+    perSeed: Int = 6,
+    limit: Int = 18,
+): List<Recommendation> {
+    val seen = mutableSetOf<String>()
+    val result = mutableListOf<Recommendation>()
+
+    for (seed in seeds) {
+        var takenFromSeed = 0
+
+        for (item in relatedBySeed[seed.id].orEmpty()) {
+            if (takenFromSeed == perSeed || result.size == limit) break
+            if (item.id == seed.id || !seen.add(item.id)) continue
+
+            result +=
+                Recommendation(
+                    id = item.id,
+                    title = item.title,
+                    artists = item.artists.map { it.name },
+                    thumbnail = item.thumbnail,
+                    seedId = seed.id,
+                    seedTitle = seed.title,
+                )
+            takenFromSeed++
+        }
+
+        if (result.size == limit) break
+    }
+
+    return result
+}
+
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     @ApplicationContext val context: Context,
@@ -74,7 +146,11 @@ class HomeViewModel @Inject constructor(
         it[QuickPicksKey].toEnum(QuickPicks.QUICK_PICKS)
     }.distinctUntilChanged()
 
-val quickPicks = MutableStateFlow<List<Song>?>(null)
+    val quickPicks = MutableStateFlow<List<Song>?>(null)
+
+    val recommendations = MutableStateFlow<List<Recommendation>?>(null)
+
+    private var recommendationsJob: Job? = null
 
     private val hideVideoSongs =
         context.dataStore.data
@@ -94,7 +170,7 @@ val quickPicks = MutableStateFlow<List<Song>?>(null)
         database.speedDialDao.getAll()
             .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-val speedDialItems: StateFlow<List<YTItem>> =
+    val speedDialItems: StateFlow<List<YTItem>> =
         combine(
             database.speedDialDao.getAll(),
             quickPicks,
@@ -188,10 +264,84 @@ suspend fun getRandomItem(): YTItem? {
 
     private suspend fun load() {
         getQuickPicks()
+        loadRecommendations()
 
         if (YouTube.cookie != null) {
             viewModelScope.launch(Dispatchers.IO) { loadAccountInfo() }
         }
+    }
+
+    /**
+     * Shows the cached recommendations immediately, then refreshes them in the
+     * background when they are stale. The home screen never waits on this.
+     */
+    private suspend fun loadRecommendations() {
+        val cached = readRecommendationsCache()
+        if (cached?.items?.isNotEmpty() == true) {
+            recommendations.value = cached.items
+        }
+
+        val isFresh = cached != null && System.currentTimeMillis() - cached.refreshedAt < RECOMMENDATIONS_TTL
+        if (!isFresh && recommendationsJob?.isActive != true) {
+            recommendationsJob = viewModelScope.launch(Dispatchers.IO) { refreshRecommendations() }
+        }
+    }
+
+    private suspend fun refreshRecommendations() {
+        val hideExplicit = context.dataStore.get(HideExplicitKey, false)
+        val hideVideoSongs = context.dataStore.get(HideVideoSongsKey, false)
+        val hideShorts = context.dataStore.get(HideYoutubeShortsKey, false)
+
+        val seeds = recommendationSeeds()
+        if (seeds.isEmpty()) return
+
+        val relatedBySeed = mutableMapOf<String, List<SongItem>>()
+        for (seed in seeds) {
+            val endpoint =
+                YouTube.next(WatchEndpoint(videoId = seed.id)).getOrNull()?.relatedEndpoint
+                    ?: continue
+            YouTube.related(endpoint)
+                .onSuccess { page ->
+                    relatedBySeed[seed.id] =
+                        page.songs
+                            .filterExplicit(hideExplicit)
+                            .filterVideoSongs(hideVideoSongs)
+                            .filterYoutubeShorts(hideShorts)
+                }.onFailure { reportException(it) }
+        }
+
+        val built = buildRecommendations(seeds, relatedBySeed)
+        if (built.isEmpty()) return
+
+        recommendations.value = built
+        writeRecommendationsCache(RecommendationsCache(System.currentTimeMillis(), built))
+    }
+
+    /** Recently played first, then liked songs: the row follows what the user actually listens to. */
+    private suspend fun recommendationSeeds(): List<RecommendationSeed> {
+        val hideVideoSongs = context.dataStore.get(HideVideoSongsKey, false)
+
+        return (
+            database.recentSongs(RECOMMENDATION_SEED_COUNT).first() +
+                database.likedSongsByCreateDateDesc(limit = RECOMMENDATION_SEED_COUNT, offset = 0)
+        ).filterVideoSongs(hideVideoSongs)
+            .distinctBy { it.id }
+            .take(RECOMMENDATION_SEED_COUNT)
+            .map { RecommendationSeed(id = it.id, title = it.title) }
+    }
+
+    private suspend fun readRecommendationsCache(): RecommendationsCache? =
+        context.dataStore.data
+            .map { it[RecommendationsCacheKey] }
+            .first()
+            ?.let { raw -> runCatching { recommendationJson.decodeFromString<RecommendationsCache>(raw) }.getOrNull() }
+
+    private suspend fun writeRecommendationsCache(cache: RecommendationsCache) {
+        runCatching {
+            context.safeDataStoreEdit {
+                it[RecommendationsCacheKey] = recommendationJson.encodeToString(cache)
+            }
+        }.onFailure { reportException(it) }
     }
 
     private suspend fun loadAccountInfo() {
@@ -277,6 +427,16 @@ suspend fun getRandomItem(): YTItem? {
     }
 
     private var isHomeDataLoaded = false
+
+    private companion object {
+        val recommendationJson = Json { ignoreUnknownKeys = true }
+
+        /** How long a recommendation set is reused before it is fetched again. */
+        const val RECOMMENDATIONS_TTL = 12 * 60 * 60 * 1000L
+
+        /** Seeds per refill; each seed costs one `next` + one `related` request. */
+        const val RECOMMENDATION_SEED_COUNT = 3
+    }
 
     fun loadHomeData() {
         if (isHomeDataLoaded) return

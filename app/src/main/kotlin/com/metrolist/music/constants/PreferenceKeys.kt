@@ -261,6 +261,9 @@ val WrappedSeenKey = booleanPreferencesKey("wrapped_seen")
 val LastSeenVersionKey = stringPreferencesKey("lastSeenVersion")
 val RandomizeHomeOrderKey = booleanPreferencesKey("randomizeHomeOrder")
 
+// JSON blob: recommendations built from listening history, with a refresh timestamp
+val RecommendationsCacheKey = stringPreferencesKey("recommendations_cache")
+
 val ShowLikedPlaylistKey = booleanPreferencesKey("show_liked_playlist")
 val ShowDownloadedPlaylistKey = booleanPreferencesKey("show_downloaded_playlist")
 val ShowTopPlaylistKey = booleanPreferencesKey("show_top_playlist")

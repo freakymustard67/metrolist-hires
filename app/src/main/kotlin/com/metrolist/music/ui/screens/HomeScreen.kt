@@ -76,6 +76,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.metrolist.music.LocalNavController
 import androidx.navigation.compose.currentBackStackEntryAsState
+import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.AlbumItem
 import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.EpisodeItem
@@ -109,13 +110,82 @@ import com.metrolist.music.ui.menu.YouTubeSongMenu
 import com.metrolist.music.ui.utils.SnapLayoutInfoProvider
 import com.metrolist.music.utils.rememberPreference
 import com.metrolist.music.viewmodels.HomeViewModel
+import com.metrolist.music.viewmodels.Recommendation
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
+import coil3.compose.AsyncImage
+import com.metrolist.music.ui.utils.resize
 import kotlinx.coroutines.launch
 import kotlin.random.Random
+
+/**
+ * A recommendation card: artwork, song, artist, and the seed it came from.
+ */
+@Composable
+fun RecommendationCard(
+    recommendation: Recommendation,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier =
+            modifier
+                .width(140.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .padding(4.dp),
+    ) {
+        AsyncImage(
+            model = recommendation.thumbnail.resize(280, 280),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier =
+                Modifier
+                    .size(132.dp)
+                    .clip(RoundedCornerShape(10.dp)),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = recommendation.title,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = recommendation.artists.joinToString(", "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = stringResource(R.string.because_you_listened, recommendation.seedTitle),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private fun Recommendation.toSongItem() =
+    SongItem(
+        id = id,
+        title = title,
+        artists = artists.map { Artist(name = it, id = null) },
+        thumbnail = thumbnail,
+    )
 
 sealed class HomeSection(
     val id: String,
 ) {
     data object SpeedDial : HomeSection("speed_dial")
+
+    data object Recommendations : HomeSection("recommendations")
 
     data object QuickPicks : HomeSection("quick_picks")
 
@@ -139,6 +209,7 @@ fun HomeScreen(
     val isPlaying by playerConnection.isEffectivelyPlaying.collectAsStateWithLifecycle()
     val mediaMetadata by playerConnection.mediaMetadata.collectAsStateWithLifecycle()
 
+    val recommendations by viewModel.recommendations.collectAsStateWithLifecycle()
     val quickPicks by viewModel.quickPicks.collectAsStateWithLifecycle()
     val recentSongs by viewModel.recentSongs.collectAsStateWithLifecycle()
 
@@ -206,19 +277,22 @@ fun HomeScreen(
             randomizeHomeOrder,
             randomSeed,
             speedDialItems,
+            recommendations,
             quickPicks,
             recentSongs,
         ) {
             val list = mutableListOf<HomeSection>()
 
             if (speedDialItems.isNotEmpty()) list.add(HomeSection.SpeedDial)
+            if (recommendations?.isNotEmpty() == true) list.add(HomeSection.Recommendations)
             if (quickPicks?.isNotEmpty() == true) list.add(HomeSection.QuickPicks)
             if (recentSongs.isNotEmpty()) list.add(HomeSection.RecentSongs)
 
             val weight = { section: HomeSection ->
                 when (section) {
                     HomeSection.SpeedDial -> 100
-                    HomeSection.QuickPicks -> 90
+                    HomeSection.Recommendations -> 90
+                    HomeSection.QuickPicks -> 85
                     HomeSection.RecentSongs -> 80
                 }
             }
@@ -653,6 +727,73 @@ fun HomeScreen(
                                                     )
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        HomeSection.Recommendations -> {
+                            recommendations?.takeIf { it.isNotEmpty() }?.let { items ->
+                                item(key = "recommendations_title") {
+                                    val recommendationsTitle = stringResource(R.string.recommended_for_you)
+                                    NavigationTitle(
+                                        title = recommendationsTitle,
+                                        onPlayAllClick =
+                                            if (!isListenTogetherGuest) {
+                                                {
+                                                    playerConnection.playQueue(
+                                                        ListQueue(
+                                                            title = recommendationsTitle,
+                                                            items =
+                                                                items.distinctBy { it.id }.map {
+                                                                    it.toSongItem().toMediaItem()
+                                                                },
+                                                        ),
+                                                    )
+                                                }
+                                            } else {
+                                                null
+                                            },
+                                    )
+                                }
+
+                                item(key = "recommendations_list") {
+                                    LazyRow(
+                                        contentPadding =
+                                            WindowInsets.systemBars
+                                                .only(WindowInsetsSides.Horizontal)
+                                                .asPaddingValues(),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        items(
+                                            items = items,
+                                            key = { "home_recommendation_${it.id}" },
+                                        ) { recommendation ->
+                                            val song = recommendation.toSongItem()
+
+                                            RecommendationCard(
+                                                recommendation = recommendation,
+                                                onClick = {
+                                                    if (!isListenTogetherGuest) {
+                                                        playerConnection.playQueue(
+                                                            YouTubeQueue(
+                                                                WatchEndpoint(videoId = recommendation.id),
+                                                                song.toMediaMetadata(),
+                                                            ),
+                                                        )
+                                                    }
+                                                },
+                                                onLongClick = {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    menuState.show {
+                                                        YouTubeSongMenu(
+                                                            song = song,
+                                                            onDismiss = menuState::dismiss,
+                                                        )
+                                                    }
+                                                },
+                                            )
                                         }
                                     }
                                 }

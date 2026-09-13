@@ -65,6 +65,21 @@ when a cookie is set).
 - Tests: new `RecentSongsTest` (ordering by latest play, dedup, limit, never-played) and
   updated `HomeSpeedDialTest`; full app suite 203/203.
 
+## Recommendations (app)
+
+"Recommended for you" is back on the home screen, but bounded and cached instead of the
+old per-load fan-out.
+
+- Seeds = your 3 most recent plays, topped up with liked songs (`recentSongs` + `likedSongsByCreateDateDesc`).
+- Per refill: one `next` + one `related` per seed (max 6 requests), filtered by the
+  explicit/video/shorts preferences. Each card shows "Because you listened to <seed>".
+- Cached in DataStore (`RecommendationsCacheKey`) with a 12 h TTL: the row paints from
+  cache on every open, and the refill happens in the background after the home is up.
+  A refill is single-flight — no overlapping refresh storms.
+- Dedup/interleave logic is pure and tested: `buildRecommendations(perSeed = 6, limit = 18)`
+  credits a song to the first seed that suggested it and never recommends a seed itself.
+- Tests: `RecommendationsTest` (5 cases); full app suite 208/208.
+
 ## Server changes (slskd-hires repo)
 
 - `GET api/v0/files/downloads/files/{base64FilePath}` — authenticated ranged file serving.
